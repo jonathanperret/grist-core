@@ -88,6 +88,7 @@ export function makeGristConfig(options: MakeGristConfigOptions): GristLoadConfi
     templateOrg: getTemplateOrg(),
     canCloseAccount: isAffirmative(process.env.GRIST_ACCOUNT_CLOSE),
     experimentalPlugins: isAffirmative(process.env.GRIST_EXPERIMENTAL_PLUGINS),
+    useEngineIO: isAffirmative(process.env.GRIST_USE_ENGINE_IO),
     ...extra,
   };
 }

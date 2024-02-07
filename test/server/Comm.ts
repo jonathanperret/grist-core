@@ -4,11 +4,11 @@ import {assert} from 'chai';
 import * as http from 'http';
 import {AddressInfo} from 'net';
 import * as sinon from 'sinon';
-import WebSocket from 'ws';
 import * as path from 'path';
 import * as tmp from 'tmp';
 
 import {GristWSConnection, GristWSSettings} from 'app/client/components/GristWSConnection';
+import {GristClientSocket} from 'app/client/components/GristClientSocket';
 import {Comm as ClientComm} from 'app/client/components/Comm';
 import * as log from 'app/client/lib/log';
 import {Comm} from 'app/server/lib/Comm';
@@ -95,34 +95,43 @@ describe('Comm', function() {
     sandbox.restore();
   });
 
-  function getMessages(ws: WebSocket, count: number): Promise<any[]> {
+  function getMessages(ws: GristClientSocket, count: number): Promise<any[]> {
     return new Promise((resolve, reject) => {
       const messages: object[] = [];
-      ws.on('error', reject);
-      ws.on('message', (msg: string) => {
-        messages.push(JSON.parse(msg));
+      ws.onerror = (ev) => {
+        ws.onmessage = null;
+        reject(ev);
+      };
+      ws.onmessage = ({ data }: { data: string }) => {
+        messages.push(JSON.parse(data));
         if (messages.length >= count) {
+          ws.onerror = null;
+          ws.onmessage = null;
           resolve(messages);
-          ws.removeListener('error', reject);
-          ws.removeAllListeners('message');
         }
-      });
+      };
     });
   }
 
   /**
    * Returns a promise for the connected websocket.
    */
-  function connect() {
-    const ws = new WebSocket('ws://localhost:' + (server.address() as AddressInfo).port);
-    return new Promise<WebSocket>((resolve, reject) => {
-      ws.on('open', () => resolve(ws));
-      ws.on('error', reject);
+  function connect(): Promise<GristClientSocket> {
+    const ws = GristClientSocket.create('ws://localhost:' + (server.address() as AddressInfo).port);
+    return new Promise<GristClientSocket>((resolve, reject) => {
+      ws.onopen = () => {
+        ws.onerror = null;
+        resolve(ws);
+      };
+      ws.onerror = (ev) => {
+        ws.onopen = null;
+        reject(ev);
+      };
     });
   }
 
   describe("server methods", function() {
-    let ws: WebSocket;
+    let ws: GristClientSocket;
     beforeEach(async function() {
       await startComm(assortedMethods);
       ws = await connect();
@@ -513,7 +522,7 @@ function getWSSettings(docWorkerUrl: string): GristWSSettings {
   let clientId: string = 'clientid-abc';
   let counter: number = 0;
   return {
-    makeWebSocket(url: string): any { return new WebSocket(url, undefined, {}); },
+    makeWebSocket(url: string): any { return GristClientSocket.create(url); },
     async getTimezone()         { return 'UTC'; },
     getPageUrl()                { return "http://localhost"; },
     async getDocWorkerUrl()     { return docWorkerUrl; },

@@ -792,6 +792,8 @@ export interface GristLoadConfig {
   canCloseAccount?: boolean;
 
   experimentalPlugins?: boolean;
+
+  useEngineIO?: boolean;
 }
 
 export const Features = StringUnion(
