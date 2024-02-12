@@ -75,7 +75,7 @@ export interface GristWSSettings {
 export class GristWSSettingsBrowser implements GristWSSettings {
   private _sessionStorage = getSessionStorage();
 
-  public makeWebSocket(url: string) { return GristClientSocket.create(url, {}); }
+  public makeWebSocket(url: string) { return GristClientSocket.create(url, {}, getGristConfig().useEngineIO); }
   public getTimezone()              { return guessTimezone(); }
   public getPageUrl()               { return G.window.location.href; }
   public async getDocWorkerUrl(assignmentId: string|null) {

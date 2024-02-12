@@ -379,7 +379,8 @@ describe('Comm', function() {
       // Intercept the call to _onClose to know when it occurs, since we are trying to hit a
       // situation where 'close' and 'failedSend' events happen in either order.
       const stubOnClose = sandbox.stub(Client.prototype as any, '_onClose')
-        .callsFake(function(this: Client) {
+        .callsFake(async function(this: Client) {
+          if (!options.closeHappensFirst) { await delay(10); }
           eventsSeen.push('close');
           return (stubOnClose as any).wrappedMethod.apply(this, arguments);
         });
@@ -471,6 +472,9 @@ describe('Comm', function() {
         if (options.useSmallMsgs) {
           assert.deepEqual(eventsSeen, ['close']);
         } else {
+          // Make sure to have waited long enough for the 'close' event we may have delayed
+          await delay(20);
+
           // Large messages now cause a send to fail, after filling up buffer, and close the socket.
           assert.deepEqual(eventsSeen, ['close', 'close']);
         }
