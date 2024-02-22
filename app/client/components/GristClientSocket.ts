@@ -26,65 +26,107 @@ export abstract class GristClientSocket {
 }
 
 export class GristClientSocketEIO extends GristClientSocket {
-  private _ws: EIOSocket;
+  private _url: string;
+  private _options: GristClientSocketOptions | undefined;
+
+  private _socket: EIOSocket;
+
+  private _openSuccess: boolean = false;
+  private _downgraded: boolean = false;
+
+  private _messageHandler: null | ((event: { data: string }) => void);
+  private _openHandler: null | (() => void);
+  private _errorHandler: null | ((ev: any) => void);
+  private _closeHandler: null | (() => void);
 
   constructor(url: string, options?: GristClientSocketOptions) {
     super();
-    this._ws = new EIOSocket(url, {
-      path: '/engine.io' + new URL(url).pathname,
-      transports: ['websocket'],
-      upgrade: false,
-      extraHeaders: options?.headers,
-    });
+    this._url = url;
+    this._options = options;
+
+    this._createSocket();
   }
 
   public set onmessage(cb: null | ((event: { data: string }) => void)) {
-    if(cb) {
-      this._ws.on('message', (data) => cb({data}));
-    } else {
-      this._ws.off('message');
-    }
+    this._messageHandler = cb;
   }
 
   public set onopen(cb: null | (() => void)) {
-    if(cb) {
-      this._ws.on('open', cb);
-    } else {
-      this._ws.off('open');
-    }
+    this._openHandler = cb;
   }
 
   public set onerror(cb: null | ((ev: any) => void)) {
-    if(cb) {
-      this._ws.on('error', cb);
-    } else {
-      this._ws.off('error');
-    }
+    this._errorHandler = cb;
   }
 
   public set onclose(cb: null | (() => void)) {
-    if(cb) {
-      this._ws.on('close', cb);
-    } else {
-      this._ws.off('close');
-    }
+    this._closeHandler = cb;
   }
 
   public close() {
-    this._ws.close();
+    this._socket.close();
   }
 
   public send(data: string) {
-    this._ws.send(data);
+    this._socket.send(data);
   }
 
   // pause() and resume() assume a WebSocket transport
   public pause() {
-    (this._ws as any).transport.ws?.pause();
+    (this._socket as any).transport.ws?.pause();
   }
 
   public resume() {
-    (this._ws as any).transport.ws?.resume();
+    (this._socket as any).transport.ws?.resume();
+  }
+
+  private _createSocket() {
+    if (this._socket) {
+      this._socket.off('message');
+      this._socket.off('open');
+      this._socket.off('error');
+      this._socket.off('close');
+    }
+    this._socket = new EIOSocket(this._url, {
+      path: '/engine.io' + new URL(this._url).pathname,
+      transports: this._downgraded ? ['polling'] : ['websocket'],
+      upgrade: false,
+      extraHeaders: this._options?.headers,
+    });
+    this._socket.on('message', this._onMessage.bind(this));
+    this._socket.on('open', this._onOpen.bind(this));
+    this._socket.on('error', this._onError.bind(this));
+    this._socket.on('close', this._onClose.bind(this));
+  }
+
+  private _onMessage(data: string) {
+    if (this._openSuccess && this._messageHandler) {
+      this._messageHandler({ data });
+    }
+  }
+
+  private _onOpen() {
+    this._openSuccess = true;
+    if (this._openHandler) {
+      this._openHandler();
+    }
+  }
+
+  private _onError(ev: any) {
+    if (!this._openSuccess && !this._downgraded) {
+      this._downgraded = true;
+      this._createSocket();
+    } else {
+      if (this._errorHandler) {
+        this._errorHandler(ev);
+      }
+    }
+  }
+
+  private _onClose() {
+    if (this._openSuccess && this._closeHandler) {
+      this._closeHandler();
+    }
   }
 }
 
