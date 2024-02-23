@@ -285,6 +285,7 @@ GRIST_TRUST_PLUGINS | if set, plugins are expect to be served from the same host
 GRIST_USER_ROOT     | an extra path to look for plugins in - Grist will scan for plugins in `$GRIST_USER_ROOT/plugins`.
 GRIST_UI_FEATURES | comma-separated list of UI features to enable. Allowed names of parts: `helpCenter,billing,templates,createSite,multiSite,multiAccounts,sendToDrive,tutorials`. If a part also exists in GRIST_HIDE_UI_ELEMENTS, it won't be enabled.
 GRIST_UNTRUSTED_PORT | if set, plugins will be served from the given port. This is an alternative to setting APP_UNTRUSTED_URL.
+GRIST_USE_ENGINE_IO | if set, an alternative WebSocket implementation will be used that allows a fallback to HTTP long polling.
 GRIST_WIDGET_LIST_URL | a url pointing to a widget manifest, by default `https://github.com/gristlabs/grist-widget/releases/download/latest/manifest.json` is used
 COOKIE_MAX_AGE      | session cookie max age, defaults to 90 days; can be set to "none" to make it a session cookie
 HOME_PORT           | port number to listen on for REST API server; if set to "share", add API endpoints to regular grist port.
