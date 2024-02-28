@@ -31,7 +31,13 @@ export class GristClientSocketEIO extends GristClientSocket {
 
   private _socket: EIOSocket;
 
-  private _openSuccess: boolean = false;
+  // Set to true when the connection process is complete, either succesfully or
+  // after the WebSocket and polling transports have both failed.  Events from
+  // the underlying socket are not forwarded to the client until that point.
+  private _openDone: boolean = false;
+
+  // Means that the WebSocket connection attempt failed and we are now trying
+  // to establish a polling connection.
   private _downgraded: boolean = false;
 
   private _messageHandler: null | ((event: { data: string }) => void);
@@ -100,32 +106,35 @@ export class GristClientSocketEIO extends GristClientSocket {
   }
 
   private _onMessage(data: string) {
-    if (this._openSuccess && this._messageHandler) {
-      this._messageHandler({ data });
+    if (this._openDone) {
+      this._messageHandler?.({ data });
     }
   }
 
   private _onOpen() {
-    this._openSuccess = true;
-    if (this._openHandler) {
-      this._openHandler();
-    }
+    // The connection was established successfully. Any future events can now
+    // be forwarded to the client.
+    this._openDone = true;
+    this._openHandler?.();
   }
 
   private _onError(ev: any) {
-    if (!this._openSuccess && !this._downgraded) {
+    if (!this._openDone && !this._downgraded) {
+      // The first connection attempt failed. Trigger an attempt with another
+      // transport.
       this._downgraded = true;
       this._createSocket();
     } else {
-      if (this._errorHandler) {
-        this._errorHandler(ev);
-      }
+      // We will make no further attempt to connect. Any future events can now
+      // be forwarded to the client.
+      this._openDone = true;
+      this._errorHandler?.(ev);
     }
   }
 
   private _onClose() {
-    if (this._openSuccess && this._closeHandler) {
-      this._closeHandler();
+    if (this._openDone) {
+      this._closeHandler?.();
     }
   }
 }
