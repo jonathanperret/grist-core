@@ -94,7 +94,7 @@ export class GristClientSocketEIO extends GristClientSocket {
       this._socket.off('close');
     }
     this._socket = new EIOSocket(this._url, {
-      path: '/engine.io' + new URL(this._url).pathname,
+      path: new URL(this._url).pathname,
       transports: this._downgraded ? ['polling'] : ['websocket'],
       upgrade: false,
       extraHeaders: this._options?.headers,

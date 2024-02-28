@@ -26,18 +26,18 @@ export class GristSocketServerEIO extends GristSocketServer {
 
   constructor(server: http.Server) {
     super();
-    this._server = EIO.attach(server, {
+    this._server = new EIO.Server({
       allowUpgrades: false,
       transports: ['polling', 'websocket'],
       maxHttpBufferSize: MAX_PAYLOAD,
     });
+    this._attach(server);
   }
 
   public set onconnection(handler: (socket: GristServerSocket, req: http.IncomingMessage) => void) {
     this._server.on('connection', (socket: EIO.Socket) => {
       const req = socket.request;
       (socket as any).request = null; // Free initial request as recommended in the Engine.IO documentation
-      req.url = this._stripPathPrefix(req.url);
       handler(new GristServerSocketEIO(socket), req);
     });
   }
@@ -47,8 +47,28 @@ export class GristSocketServerEIO extends GristSocketServer {
     cb();
   }
 
-  private _stripPathPrefix(path?: string) {
-    return (path ?? '').replace(/^\/engine\.io/, '');
+  private _attach(server: http.Server) {
+    // At this point the Express app is installed as the handler for the server's
+    // "request" event. We need to install our own listener instead, to intercept
+    // requests that are meant for the Engine.IO polling implementation.
+    const listeners = [...server.listeners("request")];
+    server.removeAllListeners("request");
+    server.on("request", (req, res) => {
+      // Intercept requests that have transport=polling in their querystring
+      if (/[&?]transport=polling(&|$)/.test(req.url ?? '')) {
+        this._server.handleRequest(req, res);
+      } else {
+        // Otherwise fallback to the pre-existing listener(s)
+        for (const listener of listeners) {
+          listener.call(server, req, res);
+        }
+      }
+    });
+
+    // Forward all WebSocket upgrade requests to Engine.IO
+    server.on("upgrade", this._server.handleUpgrade.bind(this._server));
+
+    server.on("close", this._server.close.bind(this._server));
   }
 }
 
