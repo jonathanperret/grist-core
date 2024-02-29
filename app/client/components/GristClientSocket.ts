@@ -98,6 +98,7 @@ export class GristClientSocketEIO extends GristClientSocket {
       transports: this._downgraded ? ['polling'] : ['websocket'],
       upgrade: false,
       extraHeaders: this._options?.headers,
+      withCredentials: true,
     });
     this._socket.on('message', this._onMessage.bind(this));
     this._socket.on('open', this._onOpen.bind(this));

@@ -30,6 +30,23 @@ export class GristSocketServerEIO extends GristSocketServer {
       allowUpgrades: false,
       transports: ['polling', 'websocket'],
       maxHttpBufferSize: MAX_PAYLOAD,
+      cors: {
+        // This will cause engine.io to reflect any client-provided Origin into
+        // the Access-Control-Allow-Origin header, essentially disabling the
+        // protection offered by the Same-Origin Policy. This sounds insecure
+        // but is actually the security model of native WebSockets (they are
+        // not covered by SOP; any webpage can open a WebSocket connecting to
+        // any other domain, including the target domain's cookies; it is up to
+        // the receiving server to check the request's Origin header). Since
+        // this CORS behavior will only apply to polling requests, which end up
+        // subjected downstream to the same Origin checks as those necessarily
+        // applied to WebSocket requests, it is safe to let any client attempt
+        // a connection here.
+        origin: true,
+        // We need to allow the client to send its cookies. See above for the
+        // reasoning on why it is safe to do so.
+        credentials: true,
+      },
     });
     this._attach(server);
   }
