@@ -69,8 +69,17 @@ export class GristServerSocketEIO extends GristServerSocket {
     this._socket.close();
   }
 
+  // Terminates the connection without waiting for the client to close its own side.
   public terminate() {
-    this._socket.close(/*discard*/ true);
+    // First trigger a normal close. For the polling transport, this is sufficient and instataneous.
+    this._socket.close(/* discard */ true);
+
+    // Abrupt termination only makes sense for actual WebSocket connections.
+    if (this._socket.transport.name === "websocket") {
+      // Engine.IO does not expose ws's terminate() method unfortunately, so we have
+      // to dig a bit to acces it.
+      (this._socket.transport as any).socket?.terminate?.();
+    }
   }
 
   public get isOpen() {
