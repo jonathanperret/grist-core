@@ -1,6 +1,5 @@
 import * as WS from 'ws';
 import * as EIO from 'engine.io';
-import log from 'app/server/lib/log';
 
 export abstract class GristServerSocket {
   public abstract set onerror(handler: (err: unknown) => void);
@@ -14,7 +13,7 @@ export abstract class GristServerSocket {
 }
 
 export class GristServerSocketEIO extends GristServerSocket {
-  private _eventHandlers: Array<{event: string, handler: (...args: any[]) => void}> = [];
+  private _eventHandlers: Array<{ event: string, handler: (...args: any[]) => void }> = [];
   private _messageCounter = 0;
   private _messageCallbacks: Map<number, (err: any) => void> = new Map();
 
@@ -24,42 +23,33 @@ export class GristServerSocketEIO extends GristServerSocket {
     // Note that as far as I can tell, Engine.IO sockets never emit "error"
     // but instead include error information in the "close" event.
     this._socket.on('error', handler);
-    this._eventHandlers.push({event: 'error', handler});
+    this._eventHandlers.push({ event: 'error', handler });
   }
 
   public set onclose(handler: () => void) {
     const wrappedHandler = (reason: string, description: any) => {
-      log.debug("got socket close reason=%s description=%s messages=%s",
-        reason, description?.message ?? description, [...this._messageCallbacks.keys()]);
-
       const err = description ?? new Error(reason);
-      for(const msgNum of this._messageCallbacks.keys()) {
-        const cb = this._messageCallbacks.get(msgNum);
-        if (cb) {
-          log.debug("calling cb for msg %d with %s", msgNum, err?.message || err);
-          cb(err);
-        }
+      for (const cb of this._messageCallbacks.values()) {
+        cb?.(err);
       }
       this._messageCallbacks.clear();
 
-      log.debug("calling close handler");
       handler();
     };
     this._socket.on('close', wrappedHandler);
-    this._eventHandlers.push({event: 'close', handler: wrappedHandler});
+    this._eventHandlers.push({ event: 'close', handler: wrappedHandler });
   }
 
   public set onmessage(handler: (msg: string) => void) {
     const wrappedHandler = (msg: Buffer) => {
-      log.debug("got message (%d bytes) %s", msg.length, msg.slice(0, 100));
       handler(msg.toString());
     };
     this._socket.on('message', wrappedHandler);
-    this._eventHandlers.push({event: 'message', handler: wrappedHandler});
+    this._eventHandlers.push({ event: 'message', handler: wrappedHandler });
   }
 
   public removeAllListeners() {
-    for (const {event, handler} of this._eventHandlers) {
+    for (const { event, handler } of this._eventHandlers) {
       this._socket.off(event, handler);
     }
     this._eventHandlers = [];
@@ -71,7 +61,7 @@ export class GristServerSocketEIO extends GristServerSocket {
 
   // Terminates the connection without waiting for the client to close its own side.
   public terminate() {
-    // First trigger a normal close. For the polling transport, this is sufficient and instataneous.
+    // First trigger a normal close. For the polling transport, this is sufficient and instantaneous.
     this._socket.close(/* discard */ true);
 
     // Abrupt termination only makes sense for actual WebSocket connections.
@@ -89,40 +79,38 @@ export class GristServerSocketEIO extends GristServerSocket {
   public send(data: string, cb: (err?: Error) => void) {
     const msgNum = this._messageCounter++;
     this._messageCallbacks.set(msgNum, cb);
-    log.debug("sending msg %d: %s", msgNum, { toString:()=>data.slice(0, 100) });
     this._socket.send(data, {}, () => {
-      this._messageCallbacks.delete(msgNum);
-      log.debug("calling cb for msg %d", msgNum);
-      cb();
+      if (this._messageCallbacks.delete(msgNum)) {
+        cb?.();
+      }
     });
   }
 }
 
 export class GristServerSocketWS extends GristServerSocket {
-  private _eventHandlers: Array<{event: string, handler: (...args: any[]) => void}> = [];
-  private _messageCounter = 0;
+  private _eventHandlers: Array<{ event: string, handler: (...args: any[]) => void }> = [];
 
   constructor(private _ws: WS) { super(); }
 
   public set onerror(handler: (err: unknown) => void) {
     this._ws.on('error', handler);
-    this._eventHandlers.push({event: 'error', handler});
+    this._eventHandlers.push({ event: 'error', handler });
   }
 
   public set onclose(handler: () => void) {
     this._ws.on('close', handler);
-    this._eventHandlers.push({event: 'close', handler});
+    this._eventHandlers.push({ event: 'close', handler });
   }
 
   public set onmessage(handler: (msg: string) => void) {
     this._ws.on('message', (msg: Buffer) => handler(msg.toString()));
-    this._eventHandlers.push({event: 'message', handler});
+    this._eventHandlers.push({ event: 'message', handler });
   }
 
   public removeAllListeners() {
     // Avoiding websocket.removeAllListeners() because WS.Server registers listeners
     // internally for websockets it keeps track of, and we should not accidentally remove those.
-    for (const {event, handler} of this._eventHandlers) {
+    for (const { event, handler } of this._eventHandlers) {
       this._ws.off(event, handler);
     }
     this._eventHandlers = [];
@@ -141,11 +129,6 @@ export class GristServerSocketWS extends GristServerSocket {
   }
 
   public send(data: string, cb: (err?: Error) => void) {
-    const msgNum = this._messageCounter++;
-    log.debug("sending msg %d: %s", msgNum, { toString:()=>data.slice(0, 100) });
-    this._ws.send(data, (err) => {
-      log.debug("calling cb for msg %d with %s", msgNum, err?.message);
-      cb(err);
-    });
+    this._ws.send(data, cb);
   }
 }
