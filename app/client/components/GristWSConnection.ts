@@ -212,10 +212,9 @@ export class GristWSConnection extends Disposable {
   }
 
   /**
-   * @event serverMessage Triggered when a message arrives from the server. Callbacks receive
-   *    the raw message data as an additional argument.
+   * Triggered when a message arrives from the server.
    */
-  public onmessage({ data }: { data: any }) {
+  public onmessage(data: string) {
     if (!this._ws) {
       // It's possible to receive a message after we disconnect, at least in tests (where
       // WebSocket is a node library). Ignoring is easier than unsubscribing properly.

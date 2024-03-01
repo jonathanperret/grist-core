@@ -4,7 +4,7 @@ import * as EIO from 'engine.io';
 export abstract class GristServerSocket {
   public abstract set onerror(handler: (err: unknown) => void);
   public abstract set onclose(handler: () => void);
-  public abstract set onmessage(handler: (msg: string) => void);
+  public abstract set onmessage(handler: (data: string) => void);
   public abstract removeAllListeners(): void;
   public abstract close(): void;
   public abstract terminate(): void;
@@ -40,7 +40,7 @@ export class GristServerSocketEIO extends GristServerSocket {
     this._eventHandlers.push({ event: 'close', handler: wrappedHandler });
   }
 
-  public set onmessage(handler: (msg: string) => void) {
+  public set onmessage(handler: (data: string) => void) {
     const wrappedHandler = (msg: Buffer) => {
       handler(msg.toString());
     };
@@ -102,7 +102,7 @@ export class GristServerSocketWS extends GristServerSocket {
     this._eventHandlers.push({ event: 'close', handler });
   }
 
-  public set onmessage(handler: (msg: string) => void) {
+  public set onmessage(handler: (data: string) => void) {
     this._ws.on('message', (msg: Buffer) => handler(msg.toString()));
     this._eventHandlers.push({ event: 'message', handler });
   }

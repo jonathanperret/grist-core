@@ -35,7 +35,7 @@ export class GristClient {
   private _ignoreTrivialActions: boolean = false;
 
   constructor(public ws: GristClientSocket) {
-    ws.onmessage = ({ data }) => {
+    ws.onmessage = (data: string) => {
       const msg = pick(JSON.parse(data),
                        ['reqId', 'error', 'errorCode', 'data', 'type', 'docFD']);
       if (this._ignoreTrivialActions && msg.type === 'docUserAction' &&

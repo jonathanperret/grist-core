@@ -19,7 +19,7 @@ export abstract class GristClientSocket {
       : new GristClientSocketWS(url, options);
   }
 
-  public abstract set onmessage(cb: null | ((event: { data: string }) => void));
+  public abstract set onmessage(cb: null | ((data: string) => void));
   public abstract set onopen(cb: null | (() => void));
   public abstract set onerror(cb: null | ((ev: any) => void));
   public abstract set onclose(cb: null | (() => void));
@@ -46,7 +46,7 @@ export class GristClientSocketEIO extends GristClientSocket {
   // to establish a polling connection.
   private _downgraded: boolean = false;
 
-  private _messageHandler: null | ((event: { data: string }) => void);
+  private _messageHandler: null | ((data: string) => void);
   private _openHandler: null | (() => void);
   private _errorHandler: null | ((ev: any) => void);
   private _closeHandler: null | (() => void);
@@ -59,7 +59,7 @@ export class GristClientSocketEIO extends GristClientSocket {
     this._createSocket();
   }
 
-  public set onmessage(cb: null | ((event: { data: string }) => void)) {
+  public set onmessage(cb: null | ((data: string) => void)) {
     this._messageHandler = cb;
   }
 
@@ -114,7 +114,7 @@ export class GristClientSocketEIO extends GristClientSocket {
 
   private _onMessage(data: string) {
     if (this._openDone) {
-      this._messageHandler?.({ data });
+      this._messageHandler?.(data);
     }
   }
 
@@ -158,8 +158,12 @@ export class GristClientSocketWS extends GristClientSocket {
     }
   }
 
-  public set onmessage(cb: null | ((event: { data: string }) => void)) {
-    this._ws.onmessage = cb;
+  public set onmessage(cb: null | ((data: string) => void)) {
+    this._ws.onmessage = cb ?
+      (event: WS.MessageEvent | MessageEvent<any>) => {
+        cb(event.data instanceof String ? event.data : event.data.toString());
+      }
+      : null;
   }
 
   public set onopen(cb: null | (() => void)) {

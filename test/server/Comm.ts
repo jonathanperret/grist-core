@@ -102,7 +102,7 @@ describe('Comm', function() {
         ws.onmessage = null;
         reject(ev);
       };
-      ws.onmessage = ({ data }: { data: string }) => {
+      ws.onmessage = (data: string) => {
         messages.push(JSON.parse(data));
         if (messages.length >= count) {
           ws.onerror = null;
