@@ -22,13 +22,14 @@ export abstract class GristSocketServer {
 }
 
 export class GristSocketServerEIO extends GristSocketServer {
-  private _server: EIO.Server;
+  private _eioServer: EIO.Server;
+  private _wsServer: GristSocketServerWS;
 
   constructor(server: http.Server) {
     super();
-    this._server = new EIO.Server({
+    this._eioServer = new EIO.Server({
       allowUpgrades: false,
-      transports: ['polling', 'websocket'],
+      transports: ['polling'],
       maxHttpBufferSize: MAX_PAYLOAD,
       cors: {
         // This will cause engine.io to reflect any client-provided Origin into
@@ -49,19 +50,22 @@ export class GristSocketServerEIO extends GristSocketServer {
       },
     });
     this._attach(server);
+
+    this._wsServer = new GristSocketServerWS(server);
   }
 
   public set onconnection(handler: (socket: GristServerSocket, req: http.IncomingMessage) => void) {
-    this._server.on('connection', (socket: EIO.Socket) => {
+    this._eioServer.on('connection', (socket: EIO.Socket) => {
       const req = socket.request;
       (socket as any).request = null; // Free initial request as recommended in the Engine.IO documentation
       handler(new GristServerSocketEIO(socket), req);
     });
+    this._wsServer.onconnection = handler;
   }
 
   public close(cb: (...args: any[]) => void) {
-    this._server.close();
-    cb();
+    this._eioServer.close();
+    this._wsServer.close(cb);
   }
 
   private _attach(server: http.Server) {
@@ -73,7 +77,7 @@ export class GristSocketServerEIO extends GristSocketServer {
     server.on("request", (req, res) => {
       // Intercept requests that have transport=polling in their querystring
       if (/[&?]transport=polling(&|$)/.test(req.url ?? '')) {
-        this._server.handleRequest(req, res);
+        this._eioServer.handleRequest(req, res);
       } else {
         // Otherwise fallback to the pre-existing listener(s)
         for (const listener of listeners) {
@@ -83,9 +87,9 @@ export class GristSocketServerEIO extends GristSocketServer {
     });
 
     // Forward all WebSocket upgrade requests to Engine.IO
-    server.on("upgrade", this._server.handleUpgrade.bind(this._server));
+    //server.on("upgrade", this._server.handleUpgrade.bind(this._server));
 
-    server.on("close", this._server.close.bind(this._server));
+    server.on("close", this._eioServer.close.bind(this._eioServer));
   }
 }
 

@@ -35,7 +35,8 @@ export class GristClientSocketEIO extends GristClientSocket {
   private _url: string;
   private _options: GristClientSocketOptions | undefined;
 
-  private _socket: EIOSocket;
+  private _eioSocket: EIOSocket;
+  private _wsSocket: GristClientSocketWS | null;
 
   // Set to true when the connection process is complete, either succesfully or
   // after the WebSocket and polling transports have both failed.  Events from
@@ -55,6 +56,10 @@ export class GristClientSocketEIO extends GristClientSocket {
     super();
     this._url = url;
     this._options = options;
+
+    if (isAffirmative(process.env.GRIST_FORCE_POLLING)) {
+      this._downgraded = true;
+    }
 
     this._createSocket();
   }
@@ -76,70 +81,103 @@ export class GristClientSocketEIO extends GristClientSocket {
   }
 
   public close() {
-    this._socket.close();
+    if (this._wsSocket) {
+      this._wsSocket.close();
+    } else {
+      this._eioSocket.close();
+    }
   }
 
   public send(data: string) {
-    this._socket.send(data);
+    if (this._wsSocket) {
+      this._wsSocket.send(data);
+    } else {
+      this._eioSocket.send(data);
+    }
   }
 
   // pause() and resume() assume a WebSocket transport
   public pause() {
-    (this._socket as any).transport.ws?.pause();
+    this._wsSocket?.pause();
   }
 
   public resume() {
-    (this._socket as any).transport.ws?.resume();
+    this._wsSocket?.resume();
   }
 
   private _createSocket() {
-    if (this._socket) {
-      this._socket.off('message');
-      this._socket.off('open');
-      this._socket.off('error');
-      this._socket.off('close');
+    if (this._wsSocket) {
+      this._wsSocket.onmessage = null;
+      this._wsSocket.onopen = null;
+      this._wsSocket.onerror = null;
+      this._wsSocket.onclose = null;
+      this._wsSocket = null;
     }
-    this._socket = new EIOSocket(this._url, {
-      path: new URL(this._url).pathname,
-      transports: this._downgraded ? ['polling'] : ['websocket'],
-      upgrade: false,
-      extraHeaders: this._options?.headers,
-      withCredentials: true,
-    });
-    this._socket.on('message', this._onMessage.bind(this));
-    this._socket.on('open', this._onOpen.bind(this));
-    this._socket.on('error', this._onError.bind(this));
-    this._socket.on('close', this._onClose.bind(this));
+    if (this._downgraded) {
+      this._eioSocket = new EIOSocket(this._url, {
+        path: new URL(this._url).pathname,
+        transports: ['polling'],
+        upgrade: false,
+        extraHeaders: this._options?.headers,
+        withCredentials: true,
+      });
+      this._eioSocket.on('message', this._onEIOMessage.bind(this));
+      this._eioSocket.on('open', this._onEIOOpen.bind(this));
+      this._eioSocket.on('error', this._onEIOError.bind(this));
+      this._eioSocket.on('close', this._onEIOClose.bind(this));
+    } else {
+      this._wsSocket = new GristClientSocketWS(this._url, this._options);
+      this._wsSocket.onmessage = this._onWSMessage.bind(this);
+      this._wsSocket.onopen = this._onWSOpen.bind(this);
+      this._wsSocket.onerror = this._onWSError.bind(this);
+      this._wsSocket.onclose = this._onWSClose.bind(this);
+    }
   }
 
-  private _onMessage(data: string) {
+  private _onEIOMessage(data: string) {
+    this._messageHandler?.(data);
+  }
+
+  private _onEIOOpen() {
+    this._openHandler?.();
+  }
+
+  private _onEIOError(ev: any) {
+    // We will make no further attempt to connect. Any future events can now
+    // be forwarded to the client.
+    this._openDone = true;
+    this._errorHandler?.(ev);
+  }
+
+  private _onEIOClose() {
+    this._closeHandler?.();
+  }
+
+  private _onWSMessage(data: string) {
     if (this._openDone) {
       this._messageHandler?.(data);
     }
   }
 
-  private _onOpen() {
+  private _onWSOpen() {
     // The connection was established successfully. Any future events can now
     // be forwarded to the client.
     this._openDone = true;
     this._openHandler?.();
   }
 
-  private _onError(ev: any) {
-    if (!this._openDone && !this._downgraded) {
+  private _onWSError(ev: any) {
+    if (!this._openDone) {
       // The first connection attempt failed. Trigger an attempt with another
       // transport.
       this._downgraded = true;
       this._createSocket();
     } else {
-      // We will make no further attempt to connect. Any future events can now
-      // be forwarded to the client.
-      this._openDone = true;
       this._errorHandler?.(ev);
     }
   }
 
-  private _onClose() {
+  private _onWSClose() {
     if (this._openDone) {
       this._closeHandler?.();
     }
