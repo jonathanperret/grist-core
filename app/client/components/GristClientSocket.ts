@@ -1,15 +1,21 @@
 import WS from 'ws';
 import {Socket as EIOSocket} from 'engine.io-client';
 import {isAffirmative} from 'app/common/gutil';
+import {isClient} from 'app/common/gristUrls';
+import {getGristConfig} from 'app/common/urlUtils';
 
 interface GristClientSocketOptions {
   headers?: Record<string, string>;
 }
 
 export abstract class GristClientSocket {
-  public static create(url: string, options?: GristClientSocketOptions, useEngineIO: boolean=false): GristClientSocket {
-    return (useEngineIO || isAffirmative(process.env.GRIST_USE_ENGINE_IO)) ?
-        new GristClientSocketEIO(url, options)
+  public static create(url: string, options?: GristClientSocketOptions): GristClientSocket {
+    const useEngineIO = isClient() ?
+      getGristConfig().useEngineIO
+      : isAffirmative(process.env.GRIST_USE_ENGINE_IO);
+
+    return useEngineIO ?
+      new GristClientSocketEIO(url, options)
       : new GristClientSocketWS(url, options);
   }
 
