@@ -793,6 +793,8 @@ export interface GristLoadConfig {
 
   experimentalPlugins?: boolean;
 
+  // Whether to enable the Engine.IO communication layer that enables
+  // HTTP long polling as a fallback when WebSockets are not available.
   useEngineIO?: boolean;
 }
 
