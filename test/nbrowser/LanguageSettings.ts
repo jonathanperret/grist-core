@@ -23,9 +23,8 @@ describe("LanguageSettings", function() {
   for (const [locale, countryCode, language] of locales) {
     describe(`correctly detects browser language ${locale}`, () => {
       // Change the language to the one we want to test.
-      const skipStatus = withLang(locale);
+      withLang(locale);
       before(async function() {
-        if (skipStatus.skipped) { return; }
         const session = await gu.session().personalSite.anon.login();
         await session.loadRelPath("/");
         await gu.waitForDocMenuToLoad();
@@ -139,16 +138,14 @@ describe("LanguageSettings", function() {
   });
 
   describe("for logged in user with nb-NO", function() {
-    const skipStatus = withLang("de");
+    withLang("de");
     let session: gu.Session;
     before(async function() {
-      if (skipStatus.skipped) { return; }
       session = await gu.session().login();
       await session.loadRelPath("/");
       await gu.waitForDocMenuToLoad();
     });
     after(async function() {
-      if (skipStatus.skipped) { return; }
       await clearCookie();
       const api = session.createHomeApi();
       await api.updateUserLocale(null);
@@ -220,21 +217,13 @@ async function languageInCookie(): Promise<string | null> {
   return cookie2.match(/grist_user_locale=([^;]+)/)?.[1] ?? null;
 }
 
-function withLang(locale: string): {skipped: boolean} {
+function withLang(locale: string) {
   let customDriver: WebDriver;
-  let oldLanguage: string | undefined;
-  const skipStatus = {skipped: false};
   before(async function() {
-    // On Mac we can't change the language (except for English), so skip the test.
-    if (await gu.isMac() && locale !== 'en') { skipStatus.skipped = true; return this.skip(); }
-    oldLanguage = process.env.LANGUAGE;
-    // How to run chrome with a different language:
-    // https://developer.chrome.com/docs/extensions/reference/i18n/#how-to-set-browsers-locale
-    process.env.LANGUAGE = locale;
+    // Use --accept-lang to customize Accept header, see https://issues.chromium.org/issues/40212703
     customDriver = await createDriver({
       extraArgs: [
-        'lang=' + locale,
-        ...(process.env.MOCHA_WEBDRIVER_HEADLESS ? [`headless=chrome`] : [])
+        'accept-lang=' + locale,
       ]
     });
     server.setDriver(customDriver);
@@ -244,13 +233,10 @@ function withLang(locale: string): {skipped: boolean} {
     await gu.waitForDocMenuToLoad();
   });
   after(async function() {
-    if (skipStatus.skipped) { return; }
     gu.setDriver();
     server.setDriver();
     await customDriver.quit();
-    process.env.LANGUAGE = oldLanguage;
   });
-  return skipStatus;
 }
 
 function langButton() {

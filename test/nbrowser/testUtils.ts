@@ -22,10 +22,20 @@ import * as gu from 'test/nbrowser/gristUtils';
 import {server} from 'test/nbrowser/testServer';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as chrome from 'selenium-webdriver/chrome';
 
 // Exports the server object with useful methods such as getHost(), waitServerReady(),
 // simulateLogin(), etc.
-export {server};
+export { server };
+
+// Check whether a Chrome argument has already been added.
+// This unfortunately requires digging into selenium-webdriver internals,
+// but doing it properly would require an extensive overhaul of the way
+// webdrivers are initialized.
+function hasArgument(chromeOpts: chrome.Options, argName: string) {
+  const args: string[] = (chromeOpts as any).options_.args;
+  return args.some(arg => arg.replace(/^--/, '').startsWith(`${argName}=`));
+}
 
 setOptionsModifyFunc(({chromeOpts, firefoxOpts}) => {
   if (process.env.TEST_CHROME_BINARY_PATH) {
@@ -35,6 +45,15 @@ setOptionsModifyFunc(({chromeOpts, firefoxOpts}) => {
   // Set "kiosk" printing that saves to PDF without offering any dialogs. This applies to regular
   // (non-headless) Chrome. On headless Chrome, no dialog or output occurs regardless.
   chromeOpts.addArguments("--kiosk-printing");
+
+  // Disable "Chrome for Testing" infobar, see https://chromium-review.googlesource.com/c/chromium/src/+/5012709
+  chromeOpts.addArguments("disable-infobars");
+
+  // Force en_US locale, except if it was already forced by a test
+  // Use --accept-lang to customize Accept header, see https://issues.chromium.org/issues/40212703
+  if (! hasArgument(chromeOpts, 'accept-lang'))  {
+    chromeOpts.addArguments("accept-lang=en_US");
+  }
 
   chromeOpts.setUserPreferences({
     // Don't show popups to save passwords, which are shown when running against a deployment when
