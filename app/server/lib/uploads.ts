@@ -21,6 +21,8 @@ import * as multiparty from 'multiparty';
 import fetch, {Response as FetchResponse} from 'node-fetch';
 import * as path from 'path';
 import * as tmp from 'tmp';
+import { getDocWorkerUrlInfo } from './DocWorkerUtils';
+import { IDocWorkerMap } from './DocWorkerMap';
 
 // After some time of inactivity, clean up the upload. We give an hour, which seems generous,
 // except that if one is toying with import options, and leaves the upload in an open browser idle
@@ -39,7 +41,12 @@ export interface FormResult {
 /**
  * Adds an upload route to the given express app, listening for POST requests at UPLOAD_URL_PATH.
  */
-export function addUploadRoute(server: GristServer, expressApp: Application, ...handlers: RequestHandler[]): void {
+export function addUploadRoute(
+  server: GristServer,
+  docWorkerMap: IDocWorkerMap,
+  expressApp: Application,
+  ...handlers: RequestHandler[]
+): void {
 
   // When doing a cross-origin post, the browser will check for access with options prior to posting.
   // We need to reassure it that the request will be accepted before it will go ahead and post.
@@ -72,7 +79,7 @@ export function addUploadRoute(server: GristServer, expressApp: Application, ...
     if (!docId) { throw new Error('doc must be specified'); }
     const accessId = makeAccessId(req, getAuthorizedUserId(req));
     try {
-      const uploadResult: UploadResult = await fetchDoc(server, docId, req, accessId,
+      const uploadResult: UploadResult = await fetchDoc(server, docWorkerMap, docId, req, accessId,
                                                         req.query.template === '1');
       if (name) {
         globalUploadSet.changeUploadName(uploadResult.uploadId, accessId, name);
@@ -404,18 +411,23 @@ async function _fetchURL(url: string, accessId: string|null, options?: FetchUrlO
  * Fetches a Grist doc potentially managed by a different doc worker.  Passes on credentials
  * supplied in the current request.
  */
-export async function fetchDoc(server: GristServer, docId: string, req: Request, accessId: string|null,
-                        template: boolean): Promise<UploadResult> {
+export async function fetchDoc(
+  server: GristServer,
+  docWorkerMap: IDocWorkerMap,
+  docId: string,
+  req: Request,
+  accessId: string | null,
+  template: boolean
+): Promise<UploadResult> {
   // Prepare headers that preserve credentials of current user.
   const headers = getTransitiveHeaders(req);
 
   // Find the doc worker responsible for the document we wish to copy.
   // The backend needs to be well configured for this to work.
-  const homeUrl = server.getHomeInternalUrl();
-  const fetchUrl = new URL(`/api/worker/${docId}`, homeUrl);
-  const response: FetchResponse = await Deps.fetch(fetchUrl.href, {headers});
-  await _checkForError(response);
-  const docWorkerUrl = getInternalDocWorkerUrl(server.getOwnUrl(), await response.json());
+  const docWorkerUrl = getInternalDocWorkerUrl(
+    server.getOwnUrl(),
+    await getDocWorkerUrlInfo(server, docWorkerMap, docId, req)
+  );
   // Download the document, in full or as a template.
   const url = new URL(`api/docs/${docId}/download?template=${Number(template)}`,
                       docWorkerUrl.replace(/\/*$/, '/'));
