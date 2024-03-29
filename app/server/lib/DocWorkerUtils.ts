@@ -35,15 +35,15 @@ import fetch, {Response as FetchResponse, RequestInit} from 'node-fetch';
  * TODO: doc worker registration could be redesigned to remove the assumption
  * of a fixed base domain.
  */
-export function customizeDocWorkerUrl(
-  docWorkerUrlSeed: string|undefined,
+export function customizeDocWorkerUrl<SeedType extends (string|null)>(
+  docWorkerUrlSeed: SeedType,
   req: express.Request
-): string|null {
+): SeedType {
   if (!docWorkerUrlSeed) {
     // When no doc worker seed, we're in single server mode.
     // Return null, to signify that the URL prefix serving the
     // current endpoint is the only one available.
-    return null;
+    return docWorkerUrlSeed;
   }
   const docWorkerUrl = new URL(docWorkerUrlSeed);
   const workerSubdomain = parseSubdomainStrictly(docWorkerUrl.hostname).org;
@@ -57,7 +57,7 @@ export function customizeDocWorkerUrl(
     const workerIdent = workerSubdomain || `local-${docWorkerUrl.port}`;
     docWorkerUrl.pathname = `/dw/${workerIdent}${docWorkerUrl.pathname}`;
   }
-  return docWorkerUrl.href;
+  return docWorkerUrl.href as SeedType;
 }
 
 /**

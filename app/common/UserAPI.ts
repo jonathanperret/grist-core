@@ -1112,17 +1112,14 @@ export class DocAPIImpl extends BaseAPI implements DocAPI {
   }
 }
 
-interface DocWorkerInfo {
-  docWorkerUrl: string|null;
-  internalDocWorkerUrl: string|null;
-  selfPrefix?: string;
+export type DocWorkerUrlInfo = {
+  docWorkerUrl: string;
+  internalDocWorkerUrl: string;
+} | {
+  selfPrefix: string;
 }
 
-function getUrlFromPrefix(homeUrl: string, prefix?: string) {
-  if (!prefix) {
-    // This should never happen.
-    throw new Error('missing selfPrefix for docWorkerUrl');
-  }
+function getUrlFromPrefix(homeUrl: string, prefix: string) {
   const url = new URL(homeUrl);
   url.pathname = prefix + url.pathname;
   return url.href;
@@ -1144,9 +1141,12 @@ function getUrlFromPrefix(homeUrl: string, prefix?: string) {
  * @param {string|undefined} docWorkerInfo.selfPrefix
  * @param {string} urlType The type of doc worker url to extract from the docWorkerInfo
  */
-export function getPublicDocWorkerUrl(homeUrl: string, docWorkerInfo: DocWorkerInfo) {
-  const publicUrl = docWorkerInfo.docWorkerUrl;
-  return publicUrl || getUrlFromPrefix(homeUrl, docWorkerInfo.selfPrefix);
+export function getPublicDocWorkerUrl(homeUrl: string, docWorkerInfo: DocWorkerUrlInfo) {
+  if ("docWorkerUrl" in docWorkerInfo) {
+    return docWorkerInfo.docWorkerUrl;
+  } else {
+    return getUrlFromPrefix(homeUrl, docWorkerInfo.selfPrefix);
+  }
 }
 
 /**
@@ -1161,7 +1161,10 @@ export function getPublicDocWorkerUrl(homeUrl: string, docWorkerInfo: DocWorkerI
  * @param {string|undefined} docWorkerInfo.selfPrefix
  * @param {string} urlType The type of doc worker url to extract from the docWorkerInfo
  */
-export function getInternalDocWorkerUrl(homeUrl: string, docWorkerInfo: DocWorkerInfo) {
-  const internalUrl = docWorkerInfo.internalDocWorkerUrl;
-  return internalUrl || getUrlFromPrefix(homeUrl, docWorkerInfo.selfPrefix);
+export function getInternalDocWorkerUrl(homeUrl: string, docWorkerInfo: DocWorkerUrlInfo) {
+  if ("internalDocWorkerUrl" in docWorkerInfo) {
+    return docWorkerInfo.internalDocWorkerUrl;
+  } else {
+    return getUrlFromPrefix(homeUrl, docWorkerInfo.selfPrefix);
+  }
 }

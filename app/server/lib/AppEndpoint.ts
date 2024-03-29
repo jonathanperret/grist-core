@@ -9,7 +9,7 @@ import {ApiError} from 'app/common/ApiError';
 import {getSlugIfNeeded, parseUrlId, SHARE_KEY_PREFIX} from 'app/common/gristUrls';
 import {LocalPlugin} from "app/common/plugin";
 import {TELEMETRY_TEMPLATE_SIGNUP_COOKIE_NAME} from 'app/common/Telemetry';
-import {Document as APIDocument} from 'app/common/UserAPI';
+import {Document as APIDocument, DocWorkerUrlInfo} from 'app/common/UserAPI';
 import {Document} from "app/gen-server/entity/Document";
 import {HomeDBManager} from 'app/gen-server/lib/HomeDBManager';
 import {assertAccess, getTransitiveHeaders, getUserId, isAnonymousUser,
@@ -59,7 +59,8 @@ export function attachAppEndpoint(options: AttachOptions): void {
       // Alternatives could be: have the client to send their base URL
       // in the request; or use headers commonly added by reverse proxies.
       const selfPrefix =  "/dw/self/v/" + gristServer.getTag();
-      res.json({docWorkerUrl: null, internalDocWorkerUrl: null, selfPrefix});
+      const response: DocWorkerUrlInfo = { selfPrefix };
+      res.json(response);
       return;
     }
     if (!trustOrigin(req, res)) { throw new Error('Unrecognized origin'); }
@@ -73,10 +74,11 @@ export function attachAppEndpoint(options: AttachOptions): void {
     if (!docStatus) {
       return res.status(500).json({error: 'no worker'});
     }
-    res.json({
+    const response: DocWorkerUrlInfo = {
       docWorkerUrl: customizeDocWorkerUrl(docStatus.docWorker.publicUrl, req),
       internalDocWorkerUrl: docStatus.docWorker.internalUrl
-    });
+    };
+    res.json(response);
   }));
 
   // Handler for serving the document landing pages.  Expects the following parameters:
@@ -212,7 +214,7 @@ export function attachAppEndpoint(options: AttachOptions): void {
     await sendAppPage(req, res, {path: "", content: body.page, tag: body.tag, status: 200,
                                  googleTagManager: 'anon', config: {
       assignmentId: docId,
-      getWorker: {[docId]: customizeDocWorkerUrl(docStatus?.docWorker?.publicUrl, req)},
+      getWorker: {[docId]: customizeDocWorkerUrl(docStatus?.docWorker?.publicUrl ?? null, req)},
       getDoc: {[docId]: pruneAPIResult(doc as unknown as APIDocument)},
       plugins
     }});
