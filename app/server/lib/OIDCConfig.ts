@@ -279,18 +279,17 @@ export class OIDCConfig {
     });
   }
 
-  public async getLogoutRedirectUrl(req: express.Request): Promise<string> {
+  public async getLogoutRedirectUrl(req: express.Request, redirectUrl: URL): Promise<string> {
     const session: SessionObj|undefined = (req as RequestWithLogin).session;
-    const stableRedirectUri = new URL('/signed-out', getOriginUrl(req)).href;
     // For IdPs that don't have end_session_endpoint, we just redirect to the logout page.
     if (this._skipEndSessionEndpoint) {
-      // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
-      return stableRedirectUri;
+      return redirectUrl.href;
     }
     // Alternatively, we could use a logout URL specified by configuration.
     if (this._endSessionEndpoint) {
       return this._endSessionEndpoint;
     }
+    const stableRedirectUri = new URL('/signed-out', getOriginUrl(req)).href;
     return this._client.endSessionUrl({
       // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
       post_logout_redirect_uri: stableRedirectUri,
