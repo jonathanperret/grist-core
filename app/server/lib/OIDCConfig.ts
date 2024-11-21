@@ -193,14 +193,14 @@ export class OIDCConfig {
     log.info(`OIDCConfig: initialized with issuer ${issuerUrl}`);
   }
 
-  public addEndpoints(app: express.Application, sessions: Sessions): void {
-    app.get(CALLBACK_URL, this.handleCallback.bind(this, sessions));
+  public addEndpoints(app: express.Application): void {
+    app.get(CALLBACK_URL, this.handleCallback.bind(this));
   }
 
-  public async handleCallback(sessions: Sessions, req: express.Request, res: express.Response): Promise<void> {
+  public async handleCallback(req: express.Request, res: express.Response): Promise<void> {
     let scopedSession;
     try {
-      scopedSession = sessions.getOrCreateSessionFromRequest(req);
+      scopedSession = this._sessions.getOrCreateSessionFromRequest(req);
     } catch(err) {
       log.warn("OIDCConfig callback:", err.message);
       return this._sendErrorPage(req, res);
@@ -416,7 +416,7 @@ export async function getOIDCLoginSystem(): Promise<GristLoginSystem | undefined
         getSignUpRedirectUrl: config.getLoginRedirectUrl.bind(config),
         getLogoutRedirectUrl: config.getLogoutRedirectUrl.bind(config),
         async addEndpoints(app: express.Express) {
-          config.addEndpoints(app, gristServer.getSessions());
+          config.addEndpoints(app);
           return 'oidc';
         },
       };

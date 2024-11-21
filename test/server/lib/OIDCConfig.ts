@@ -15,7 +15,7 @@ const NOOPED_SEND_APP_PAGE: SendAppPageFunction = () => Promise.resolve();
 class OIDCConfigStubbed extends OIDCConfig {
   public static async buildWithStub(
     client: Client = new ClientStub().asClient(),
-    sessions: Sessions = null as unknown as Sessions
+    sessions: Sessions = new FakeSessions().asSessions()
   ) {
     return this.build(
       NOOPED_SEND_APP_PAGE,
@@ -25,7 +25,7 @@ class OIDCConfigStubbed extends OIDCConfig {
   }
   public static async build(
     sendAppPage: SendAppPageFunction,
-    sessions: Sessions = null as unknown as Sessions,
+    sessions: Sessions = new FakeSessions().asSessions(),
     clientStub?: Client
   ): Promise<OIDCConfigStubbed> {
     const result = new OIDCConfigStubbed(sendAppPage, sessions);
@@ -700,7 +700,7 @@ describe('OIDCConfig', () => {
         };
         const config = await OIDCConfigStubbed.build(
           sendAppPageStub as SendAppPageFunction,
-          null as unknown as Sessions,
+          fakeSessions.asSessions(),
           clientStub.asClient()
         );
         clientStub.callbackParams.returns(fakeParams);
@@ -713,7 +713,6 @@ describe('OIDCConfig', () => {
           t: (key: string) => key
         } as unknown as express.Request;
         await config.handleCallback(
-          fakeSessions.asSessions(),
           req,
           fakeRes as unknown as express.Response
         );
@@ -750,7 +749,7 @@ describe('OIDCConfig', () => {
       const sendAppPageStub = Sinon.stub().resolves();
       const config = await OIDCConfigStubbed.build(
         sendAppPageStub,
-        null as unknown as Sessions,
+        fakeSessions.asSessions(),
         clientStub.asClient()
       );
       const req = {} as unknown as express.Request;
@@ -766,7 +765,6 @@ describe('OIDCConfig', () => {
 
       fakeSessions.userSession = _.clone(DEFAULT_SESSION);
       await config.handleCallback(
-        fakeSessions.asSessions(),
         req,
         fakeRes as unknown as express.Response
       );
