@@ -83,7 +83,7 @@ class FakeSessions {
   }
 
 
-  asSessions(): Sessions {
+  public asSessions(): Sessions {
     return this as unknown as Sessions;
   }
 }
