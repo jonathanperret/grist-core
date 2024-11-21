@@ -209,12 +209,7 @@ export class OIDCConfig {
     try {
       const params = this._client.callbackParams(req);
       
-      let oidcInfo;
-
-      await scopedSession.operateOnScopedSession(req, async (user) => {
-        oidcInfo = user.oidc;
-        return user;
-      });
+      const { oidc: oidcInfo } = await scopedSession.getScopedSession();
 
       if (!oidcInfo) {
         throw new Error('Missing OIDC information associated to this session');
@@ -295,11 +290,7 @@ export class OIDCConfig {
 
   public async getLogoutRedirectUrl(req: express.Request, redirectUrl: URL): Promise<string> {
     const scopedSession = this._sessions.getOrCreateSessionFromRequest(req);
-    let idToken;
-    await scopedSession.operateOnScopedSession(req, async (user) => {
-      idToken = user.oidc?.idToken;
-      return user;
-    });
+    const { oidc } = await scopedSession.getScopedSession();
 
     // For IdPs that don't have end_session_endpoint, we just redirect to the logout page.
     if (this._skipEndSessionEndpoint) {
@@ -313,7 +304,7 @@ export class OIDCConfig {
     return this._client.endSessionUrl({
       // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
       post_logout_redirect_uri: stableRedirectUri,
-      id_token_hint: idToken,
+      id_token_hint: oidc?.idToken,
     });
   }
 

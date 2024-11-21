@@ -79,9 +79,12 @@ class FakeSessions {
         op: (user: SessionUserObj) => Promise<SessionUserObj>
       ) => {
         this.userSession = await op(this.userSession);
-      }
+      },
+
+      getScopedSession: async () => this.userSession,
     } as unknown as ScopedSession;
   }
+
 
   asSessions(): Sessions {
     return this as unknown as Sessions;
