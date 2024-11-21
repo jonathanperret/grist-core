@@ -205,10 +205,10 @@ export class OIDCConfig {
       log.warn("OIDCConfig callback:", err.message);
       return this._sendErrorPage(req, res);
     }
-    
+
     try {
       const params = this._client.callbackParams(req);
-      
+
       const { oidc: oidcInfo } = await scopedSession.getScopedSession();
 
       if (!oidcInfo) {
@@ -237,7 +237,7 @@ export class OIDCConfig {
       const profile = this._makeUserProfileFromUserInfo(userInfo);
       log.info(`OIDCConfig: got OIDC response for ${profile.email} (${profile.name}) redirecting to ${targetUrl}`);
 
-      await scopedSession.updateUser(req,{
+      await scopedSession.updateUser(req, {
         profile,
         // We clear the previous session info, like the states, nonce or the code verifier, which
         // now that we are authenticated.
@@ -272,7 +272,7 @@ export class OIDCConfig {
       targetUrl: targetUrl.href,
       ...this._protectionManager.generateSessionInfo()
     };
-    
+
     await scopedSession.updateUser(req, {
       oidc: oidcInfo,
     });
