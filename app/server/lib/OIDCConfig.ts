@@ -108,7 +108,7 @@ export class OIDCConfig {
     return config;
   }
 
-  protected _client: Client;
+  private _client: Client;
   private _redirectUrl: string;
   private _namePropertyKey?: string;
   private _emailPropertyKey: string;
@@ -118,7 +118,7 @@ export class OIDCConfig {
   private _protectionManager: ProtectionsManager;
   private _acrValues?: string;
 
-  protected constructor(
+  public constructor(
     private _sendAppPage: SendAppPageFunction,
     private _sessions: Sessions,
   ) {}
@@ -308,7 +308,7 @@ export class OIDCConfig {
     return this._protectionManager.supportsProtection(protection);
   }
 
-  protected async _initClient({ issuerUrl, clientId, clientSecret, extraMetadata }:
+  private async _initClient({ issuerUrl, clientId, clientSecret, extraMetadata }:
     { issuerUrl: string, clientId: string, clientSecret: string, extraMetadata: Partial<ClientMetadata> }
   ): Promise<void> {
     const issuer = await Issuer.discover(issuerUrl);
