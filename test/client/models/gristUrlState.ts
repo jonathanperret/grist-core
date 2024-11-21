@@ -402,7 +402,7 @@ describe('gristUrlState', function() {
 
     it('getLoginUrl should skip encoding redirect url on oauth2 callback page', function() {
       setWindowLocation('http://localhost:8080/oauth2/callback?error=something');
-      assert.equal(getLoginUrl(), 'http://localhost:8080/o/docs/login?next=%2F');
+      assert.equal(getLoginUrl(), 'http://localhost:8080/login?next=%2F');
       setWindowLocation('https://docs.getgrist.com/oauth2/callback?error=something');
       assert.equal(getLoginUrl(), 'https://docs.getgrist.com/login?next=%2F');
     });
