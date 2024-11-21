@@ -66,22 +66,19 @@ class ClientStub {
 }
 
 class FakeSessions {
-  public userSession: SessionUserObj;
+  public user: SessionUserObj;
   
-  constructor(initialSession: SessionUserObj = {}) {
-    this.userSession = _.clone(initialSession);
+  constructor(initialUser: SessionUserObj = {}) {
+    this.user = _.clone(initialUser);
   }
 
   getOrCreateSessionFromRequest(): ScopedSession {
     return {
-      operateOnScopedSession: async (
-        req: express.Request,
-        op: (user: SessionUserObj) => Promise<SessionUserObj>
-      ) => {
-        this.userSession = await op(this.userSession);
-      },
+      getScopedSession: async () => _.clone(this.user),
 
-      getScopedSession: async () => this.userSession,
+      updateUser : async(req: express.Request, newProps: Partial<SessionUserObj>) => {
+        Object.assign(this.user, newProps);
+      }
     } as unknown as ScopedSession;
   }
 
@@ -446,7 +443,7 @@ describe('OIDCConfig', () => {
         assert.equal(url, ClientStub.FAKE_REDIRECT_URL);
         assert.isTrue(clientStub.authorizationUrl.calledOnce);
         assert.deepEqual(clientStub.authorizationUrl.firstCall.args, ctx.expectedCalledWith);
-        assert.deepEqual(fakeSessions.userSession.oidc, ctx.expectedSession.oidc);
+        assert.deepEqual(fakeSessions.user.oidc, ctx.expectedSession.oidc);
       });
     });
   });
@@ -483,7 +480,7 @@ describe('OIDCConfig', () => {
         status: Sinon.stub().returnsThis(),
         send: Sinon.stub().returnsThis(),
       };
-      fakeSessions.userSession = {};
+      fakeSessions.user = {};
     });
 
     function checkUserProfile(expectedUserProfile: object) {
@@ -710,7 +707,7 @@ describe('OIDCConfig', () => {
         const tokenSet = { id_token: 'id_token', ...ctx.tokenSet };
         clientStub.callback.resolves(tokenSet);
         clientStub.userinfo.returns(_.clone(ctx.userInfo ?? FAKE_USER_INFO));
-        fakeSessions.userSession = _.clone(ctx.session); // session is modified, so clone it
+        fakeSessions.user = _.clone(ctx.session); // session is modified, so clone it
 
         const req = {
           t: (key: string) => key
@@ -737,11 +734,11 @@ describe('OIDCConfig', () => {
             fakeParams,
             ctx.expectedCbChecks ?? DEFAULT_EXPECTED_CALLBACK_CHECKS
           ]);
-          assert.deepEqual(fakeSessions.userSession.oidc, {
+          assert.deepEqual(fakeSessions.user.oidc, {
             idToken: tokenSet.id_token,
           }, 'oidc info should only keep state and id_token in the session and for the logout');
         }
-        ctx.extraChecks?.({ fakeRes, user: fakeSessions.userSession, sendAppPageStub });
+        ctx.extraChecks?.({ fakeRes, user: fakeSessions.user, sendAppPageStub });
       });
     });
 
@@ -766,13 +763,13 @@ describe('OIDCConfig', () => {
       const err = new OIDCError.OPError({error: 'userinfo failed'}, errorResponse);
       clientStub.userinfo.rejects(err);
 
-      fakeSessions.userSession = _.clone(DEFAULT_SESSION);
+      fakeSessions.user = _.clone(DEFAULT_SESSION);
       await config.handleCallback(
         req,
         fakeRes as unknown as express.Response
       );
 
-      assert.isUndefined(fakeSessions.userSession.oidc);
+      assert.isUndefined(fakeSessions.user.oidc);
 
       assert.equal(logErrorStub.callCount, 2, 'logErrorStub should be called twice');
       assert.include(logErrorStub.firstCall.args[0], err.message);

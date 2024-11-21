@@ -237,7 +237,7 @@ export class OIDCConfig {
       const profile = this._makeUserProfileFromUserInfo(userInfo);
       log.info(`OIDCConfig: got OIDC response for ${profile.email} (${profile.name}) redirecting to ${targetUrl}`);
 
-      await scopedSession.operateOnScopedSession(req, async (user) => Object.assign(user, {
+      await scopedSession.updateUser(req,{
         profile,
         // We clear the previous session info, like the states, nonce or the code verifier, which
         // now that we are authenticated.
@@ -245,7 +245,7 @@ export class OIDCConfig {
         oidc: {
           idToken: tokenSet.id_token,
         }
-      }));
+      });
 
       res.redirect(targetUrl ?? '/');
     } catch (err) {
@@ -259,9 +259,7 @@ export class OIDCConfig {
       // This way, we prevent several login attempts.
       //
       // Also session deletion must be done before sending the response.
-      await scopedSession.operateOnScopedSession(req, async (user) => Object.assign(user, {
-        oidc: undefined
-      }));
+      await scopedSession.updateUser(req, { oidc: undefined });
 
       await this._sendErrorPage(req, res, err.userFriendlyMessage);
     }
@@ -275,11 +273,9 @@ export class OIDCConfig {
       ...this._protectionManager.generateSessionInfo()
     };
     
-    await scopedSession.operateOnScopedSession(req, async (user) =>
-      Object.assign(user, {
-        oidc: oidcInfo,
-      })
-    );
+    await scopedSession.updateUser(req, {
+      oidc: oidcInfo,
+    });
 
     return this._client.authorizationUrl({
       scope: process.env.GRIST_OIDC_IDP_SCOPES || 'openid email profile',
@@ -358,21 +354,23 @@ export class OIDCConfig {
     }
   }
 
-  private _makeUserProfileFromUserInfo(userInfo: UserinfoResponse): Partial<UserProfile> {
+  private _makeUserProfileFromUserInfo(userInfo: UserinfoResponse): UserProfile {
     return {
+      // FIXME: do not generate string "undefined"
       email: String(userInfo[this._emailPropertyKey]),
       name: this._extractName(userInfo)
     };
   }
 
-  private _extractName(userInfo: UserinfoResponse): string | undefined {
+  private _extractName(userInfo: UserinfoResponse): string {
+    // FIXME: check for presence of value
     if (this._namePropertyKey) {
-      return (userInfo[this._namePropertyKey] as any)?.toString();
+      return (userInfo[this._namePropertyKey] as any)?.toString() ?? '';
     }
     const fname = userInfo.given_name ?? '';
     const lname = userInfo.family_name ?? '';
 
-    return `${fname} ${lname}`.trim() || userInfo.name;
+    return `${fname} ${lname}`.trim() || userInfo.name || '';
   }
 
   /**
