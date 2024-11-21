@@ -1,6 +1,6 @@
 import {EnvironmentSnapshot} from "../testUtils";
 import {OIDCConfig} from "app/server/lib/OIDCConfig";
-import {SessionUserObj} from "app/server/lib/BrowserSession";
+import {ScopedSession, SessionUserObj} from "app/server/lib/BrowserSession";
 import {Sessions} from "app/server/lib/Sessions";
 import log from "app/server/lib/log";
 import {assert} from "chai";
@@ -8,7 +8,6 @@ import Sinon from "sinon";
 import {Client, custom, generators, errors as OIDCError} from "openid-client";
 import express from "express";
 import _ from "lodash";
-import {RequestWithLogin} from "app/server/lib/Authorizer";
 import { SendAppPageFunction } from "app/server/lib/sendAppPage";
 
 const NOOPED_SEND_APP_PAGE: SendAppPageFunction = () => Promise.resolve();
@@ -63,6 +62,29 @@ class ClientStub {
   }
   public getAuthorizationUrlStub() {
     return this.authorizationUrl;
+  }
+}
+
+class FakeSessions {
+  public userSession: SessionUserObj;
+  
+  constructor(initialSession: SessionUserObj = {}) {
+    this.userSession = _.clone(initialSession);
+  }
+
+  getOrCreateSessionFromRequest(): ScopedSession {
+    return {
+      operateOnScopedSession: async (
+        req: express.Request,
+        op: (user: SessionUserObj) => Promise<SessionUserObj>
+      ) => {
+        this.userSession = await op(this.userSession);
+      }
+    } as unknown as ScopedSession;
+  }
+
+  asSessions(): Sessions {
+    return this as unknown as Sessions;
   }
 }
 
@@ -410,29 +432,18 @@ describe('OIDCConfig', () => {
         Object.assign(process.env, ctx.env);
         const clientStub = new ClientStub();
         const req = {} as unknown as express.Request;
-        let userSession: SessionUserObj = {};
-        const fakeSessions = {
-          getOrCreateSessionFromRequest: () => ({
-            operateOnScopedSession: async (
-              req: Request,
-              op: (user: SessionUserObj) => Promise<SessionUserObj>
-            ) => {
-              userSession = await op(userSession);
-            },
-          }),
-        } as unknown as Sessions;
+        const fakeSessions = new FakeSessions();
         const config = await OIDCConfigStubbed.buildWithStub(
           clientStub.asClient(),
-          fakeSessions
+          fakeSessions.asSessions()
         );
 
-        fakeSessions;
         const url = await config.getLoginRedirectUrl(req, new URL(TARGET_URL));
 
         assert.equal(url, ClientStub.FAKE_REDIRECT_URL);
         assert.isTrue(clientStub.authorizationUrl.calledOnce);
         assert.deepEqual(clientStub.authorizationUrl.firstCall.args, ctx.expectedCalledWith);
-        assert.deepEqual(userSession.oidc, ctx.expectedSession.oidc);
+        assert.deepEqual(fakeSessions.userSession.oidc, ctx.expectedSession.oidc);
       });
     });
   });
@@ -461,17 +472,7 @@ describe('OIDCConfig', () => {
       send: Sinon.SinonStub;
       redirect: Sinon.SinonStub;
     };
-    let userSession: SessionUserObj = {};
-    const fakeSessions = {
-      getOrCreateSessionFromRequest: () => ({
-        operateOnScopedSession: async (
-          req: Request,
-          op: (user: SessionUserObj) => Promise<SessionUserObj>
-        ) => {
-          userSession = await op(userSession);
-        },
-      }),
-    } as unknown as Sessions;
+    const fakeSessions = new FakeSessions();
 
     beforeEach(() => {
       fakeRes = {
@@ -479,7 +480,7 @@ describe('OIDCConfig', () => {
         status: Sinon.stub().returnsThis(),
         send: Sinon.stub().returnsThis(),
       };
-      userSession = {};
+      fakeSessions.userSession = {};
     });
 
     function checkUserProfile(expectedUserProfile: object) {
@@ -706,13 +707,13 @@ describe('OIDCConfig', () => {
         const tokenSet = { id_token: 'id_token', ...ctx.tokenSet };
         clientStub.callback.resolves(tokenSet);
         clientStub.userinfo.returns(_.clone(ctx.userInfo ?? FAKE_USER_INFO));
-        userSession = { oidc: _.clone(ctx.session.oidc) }; // session is modified, so clone it
-        
+        fakeSessions.userSession = _.clone(ctx.session); // session is modified, so clone it
+
         const req = {
           t: (key: string) => key
         } as unknown as express.Request;
         await config.handleCallback(
-          fakeSessions,
+          fakeSessions.asSessions(),
           req,
           fakeRes as unknown as express.Response
         );
@@ -734,11 +735,11 @@ describe('OIDCConfig', () => {
             fakeParams,
             ctx.expectedCbChecks ?? DEFAULT_EXPECTED_CALLBACK_CHECKS
           ]);
-          assert.deepEqual(userSession.oidc, {
+          assert.deepEqual(fakeSessions.userSession.oidc, {
             idToken: tokenSet.id_token,
           }, 'oidc info should only keep state and id_token in the session and for the logout');
         }
-        ctx.extraChecks?.({ fakeRes, user: userSession, sendAppPageStub });
+        ctx.extraChecks?.({ fakeRes, user: fakeSessions.userSession, sendAppPageStub });
       });
     });
 
@@ -763,14 +764,14 @@ describe('OIDCConfig', () => {
       const err = new OIDCError.OPError({error: 'userinfo failed'}, errorResponse);
       clientStub.userinfo.rejects(err);
 
-      userSession = _.clone(DEFAULT_SESSION);
+      fakeSessions.userSession = _.clone(DEFAULT_SESSION);
       await config.handleCallback(
-        fakeSessions,
+        fakeSessions.asSessions(),
         req,
         fakeRes as unknown as express.Response
       );
 
-      assert.isUndefined(userSession.oidc);
+      assert.isUndefined(fakeSessions.userSession.oidc);
 
       assert.equal(logErrorStub.callCount, 2, 'logErrorStub should be called twice');
       assert.include(logErrorStub.firstCall.args[0], err.message);
@@ -798,56 +799,60 @@ describe('OIDCConfig', () => {
           GRIST_OIDC_IDP_SKIP_END_SESSION_ENDPOINT: 'true',
         },
         expectedUrl: REDIRECT_URL.href,
-      }, {
+        session: FAKE_SESSION,
+      },
+      {
         itMsg: 'should use the GRIST_OIDC_IDP_END_SESSION_ENDPOINT when it is set',
         env: {
-          GRIST_OIDC_IDP_END_SESSION_ENDPOINT: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT
+          GRIST_OIDC_IDP_END_SESSION_ENDPOINT:
+            ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
         },
-        expectedUrl: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT
-      }, {
+        expectedUrl: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
+        session: FAKE_SESSION,
+      },
+      {
         itMsg: 'should call the end session endpoint with the expected parameters',
         expectedUrl: URL_RETURNED_BY_CLIENT,
         expectedLogoutParams: {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
           id_token_hint: FAKE_SESSION.oidc!.idToken,
-        }
-      }, {
+        },
+        session: FAKE_SESSION,
+      },
+      {
         itMsg: 'should call the end session endpoint with no idToken if session oidc info is missing',
         expectedUrl: URL_RETURNED_BY_CLIENT,
         expectedLogoutParams: {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
           id_token_hint: undefined,
         },
-        session: { } as SessionUserObj
-      }
-    ].forEach(ctx => {
+        session: {},
+      },
+    ].forEach((ctx) => {
       it(ctx.itMsg, async () => {
         setEnvVars();
         Object.assign(process.env, ctx.env);
         const clientStub = new ClientStub();
         clientStub.endSessionUrl.returns(URL_RETURNED_BY_CLIENT);
-        let userSession: SessionUserObj = _.clone(ctx.session ?? FAKE_SESSION);
-        const fakeSessions = {
-          getOrCreateSessionFromRequest: () => ({
-            operateOnScopedSession: async (
-              req: Request,
-              op: (user: SessionUserObj) => Promise<SessionUserObj>
-            ) => {
-              userSession = await op(userSession);
-            },
-          }),
-        } as unknown as Sessions;
-        const config = await OIDCConfigStubbed.buildWithStub(clientStub.asClient(), fakeSessions);
+
+        const fakeSessions = new FakeSessions(ctx.session);
+
+        const config = await OIDCConfigStubbed.buildWithStub(
+          clientStub.asClient(),
+          fakeSessions.asSessions()
+        );
         const req = {
           headers: {
-            host: STABLE_LOGOUT_URL.host
+            host: STABLE_LOGOUT_URL.host,
           },
-        } as unknown as RequestWithLogin;
+        } as unknown as express.Request;
         const url = await config.getLogoutRedirectUrl(req, REDIRECT_URL);
         assert.equal(url, ctx.expectedUrl);
         if (ctx.expectedLogoutParams) {
           assert.isTrue(clientStub.endSessionUrl.calledOnce);
-          assert.deepEqual(clientStub.endSessionUrl.firstCall.args, [ctx.expectedLogoutParams]);
+          assert.deepEqual(clientStub.endSessionUrl.firstCall.args, [
+            ctx.expectedLogoutParams,
+          ]);
         }
       });
     });
