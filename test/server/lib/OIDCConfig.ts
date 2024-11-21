@@ -72,7 +72,7 @@ class FakeSessions {
     this.user = _.clone(initialUser);
   }
 
-  getOrCreateSessionFromRequest(): ScopedSession {
+  public getOrCreateSessionFromRequest(): ScopedSession {
     return {
       getScopedSession: async () => _.clone(this.user),
 
