@@ -73,12 +73,10 @@ import {
 import { Sessions } from './Sessions';
 import log from 'app/server/lib/log';
 import { AppSettings, appSettings } from './AppSettings';
-import { RequestWithLogin } from './Authorizer';
 import { UserProfile } from 'app/common/LoginSessionAPI';
 import { SendAppPageFunction } from 'app/server/lib/sendAppPage';
 import { StringUnionError } from 'app/common/StringUnion';
 import { EnabledProtection, EnabledProtectionString, ProtectionsManager } from './oidc/Protections';
-import { SessionObj } from './BrowserSession';
 import { getOriginUrl } from './requestUtils';
 
 const CALLBACK_URL = '/oauth2/callback';
@@ -104,13 +102,13 @@ export class OIDCConfig {
   /**
    * Handy alias to create an OIDCConfig instance and initialize it.
    */
-  public static async build(sendAppPage: SendAppPageFunction): Promise<OIDCConfig> {
-    const config = new OIDCConfig(sendAppPage);
+  public static async build(sendAppPage: SendAppPageFunction, getSessions: () => Sessions): Promise<OIDCConfig> {
+    const config = new OIDCConfig(sendAppPage, getSessions);
     await config.initOIDC();
     return config;
   }
 
-  protected _client: Client;
+  private _client: Client;
   private _redirectUrl: string;
   private _namePropertyKey?: string;
   private _emailPropertyKey: string;
@@ -120,8 +118,9 @@ export class OIDCConfig {
   private _protectionManager: ProtectionsManager;
   private _acrValues?: string;
 
-  protected constructor(
-    private _sendAppPage: SendAppPageFunction
+  public constructor(
+    private _sendAppPage: SendAppPageFunction,
+    private _getSessions: () => Sessions,
   ) {}
 
   public async initOIDC(): Promise<void> {
@@ -194,14 +193,14 @@ export class OIDCConfig {
     log.info(`OIDCConfig: initialized with issuer ${issuerUrl}`);
   }
 
-  public addEndpoints(app: express.Application, sessions: Sessions): void {
-    app.get(CALLBACK_URL, this.handleCallback.bind(this, sessions));
+  public addEndpoints(app: express.Application): void {
+    app.get(CALLBACK_URL, this.handleCallback.bind(this));
   }
 
-  public async handleCallback(sessions: Sessions, req: express.Request, res: express.Response): Promise<void> {
-    let mreq;
+  public async handleCallback(req: express.Request, res: express.Response): Promise<void> {
+    let scopedSession;
     try {
-      mreq = this._getRequestWithSession(req);
+      scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
     } catch(err) {
       log.warn("OIDCConfig callback:", err.message);
       return this._sendErrorPage(req, res);
@@ -209,13 +208,16 @@ export class OIDCConfig {
 
     try {
       const params = this._client.callbackParams(req);
-      if (!mreq.session.oidc) {
+
+      const { oidc: oidcInfo } = await scopedSession.getScopedSession();
+
+      if (!oidcInfo) {
         throw new Error('Missing OIDC information associated to this session');
       }
 
-      const { targetUrl } = mreq.session.oidc;
+      const { targetUrl } = oidcInfo;
 
-      const checks = this._protectionManager.getCallbackChecks(mreq.session.oidc);
+      const checks = this._protectionManager.getCallbackChecks(oidcInfo);
 
       // The callback function will compare the protections present in the params and the ones we retrieved
       // from the session. If they don't match, it will throw an error.
@@ -235,17 +237,16 @@ export class OIDCConfig {
       const profile = this._makeUserProfileFromUserInfo(userInfo);
       log.info(`OIDCConfig: got OIDC response for ${profile.email} (${profile.name}) redirecting to ${targetUrl}`);
 
-      const scopedSession = sessions.getOrCreateSessionFromRequest(req);
-      await scopedSession.operateOnScopedSession(req, async (user) => Object.assign(user, {
+      await scopedSession.updateUser(req, {
         profile,
-      }));
+        // We clear the previous session info, like the states, nonce or the code verifier, which
+        // now that we are authenticated.
+        // We store the idToken for later, especially for the logout
+        oidc: {
+          idToken: tokenSet.id_token,
+        }
+      });
 
-      // We clear the previous session info, like the states, nonce or the code verifier, which
-      // now that we are authenticated.
-      // We store the idToken for later, especially for the logout
-      mreq.session.oidc = {
-        idToken: tokenSet.id_token,
-      };
       res.redirect(targetUrl ?? '/');
     } catch (err) {
       log.error(`OIDC callback failed: ${err.stack}`);
@@ -258,43 +259,48 @@ export class OIDCConfig {
       // This way, we prevent several login attempts.
       //
       // Also session deletion must be done before sending the response.
-      delete mreq.session.oidc;
+      await scopedSession.updateUser(req, { oidc: undefined });
 
       await this._sendErrorPage(req, res, err.userFriendlyMessage);
     }
   }
 
   public async getLoginRedirectUrl(req: express.Request, targetUrl: URL): Promise<string> {
-    const mreq = this._getRequestWithSession(req);
+    const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
 
-    mreq.session.oidc = {
+    const oidcInfo = {
       targetUrl: targetUrl.href,
       ...this._protectionManager.generateSessionInfo()
     };
 
+    await scopedSession.updateUser(req, {
+      oidc: oidcInfo,
+    });
+
     return this._client.authorizationUrl({
       scope: process.env.GRIST_OIDC_IDP_SCOPES || 'openid email profile',
       acr_values: this._acrValues,
-      ...this._protectionManager.forgeAuthUrlParams(mreq.session.oidc),
+      ...this._protectionManager.forgeAuthUrlParams(oidcInfo),
     });
   }
 
-  public async getLogoutRedirectUrl(req: express.Request): Promise<string> {
-    const session: SessionObj|undefined = (req as RequestWithLogin).session;
-    const stableRedirectUri = new URL('/signed-out', getOriginUrl(req)).href;
-    // For IdPs that don't have end_session_endpoint, we just redirect to the logout page.
+  public async getLogoutRedirectUrl(req: express.Request, redirectUrl: URL): Promise<string> {
+    const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
+    const { oidc } = await scopedSession.getScopedSession();
+
+    // For IdPs that don't have end_session_endpoint, we just redirect to the requested page.
     if (this._skipEndSessionEndpoint) {
-      // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
-      return stableRedirectUri;
+      return redirectUrl.href;
     }
     // Alternatively, we could use a logout URL specified by configuration.
     if (this._endSessionEndpoint) {
       return this._endSessionEndpoint;
     }
+    const stableRedirectUri = new URL('/signed-out', getOriginUrl(req)).href;
     return this._client.endSessionUrl({
       // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
       post_logout_redirect_uri: stableRedirectUri,
-      id_token_hint: session?.oidc?.idToken,
+      id_token_hint: oidc?.idToken,
     });
   }
 
@@ -302,7 +308,7 @@ export class OIDCConfig {
     return this._protectionManager.supportsProtection(protection);
   }
 
-  protected async _initClient({ issuerUrl, clientId, clientSecret, extraMetadata }:
+  private async _initClient({ issuerUrl, clientId, clientSecret, extraMetadata }:
     { issuerUrl: string, clientId: string, clientSecret: string, extraMetadata: Partial<ClientMetadata> }
   ): Promise<void> {
     const issuer = await Issuer.discover(issuerUrl);
@@ -324,13 +330,6 @@ export class OIDCConfig {
         errMessage: userFriendlyMessage
       },
     });
-  }
-
-  private _getRequestWithSession(req: express.Request) {
-    const mreq = req as RequestWithLogin;
-    if (!mreq.session) { throw new Error('no session available'); }
-
-    return mreq;
   }
 
   private _buildEnabledProtections(section: AppSettings): Set<EnabledProtectionString> {
@@ -355,21 +354,23 @@ export class OIDCConfig {
     }
   }
 
-  private _makeUserProfileFromUserInfo(userInfo: UserinfoResponse): Partial<UserProfile> {
+  private _makeUserProfileFromUserInfo(userInfo: UserinfoResponse): UserProfile {
     return {
+      // FIXME: do not generate string "undefined"
       email: String(userInfo[this._emailPropertyKey]),
       name: this._extractName(userInfo)
     };
   }
 
-  private _extractName(userInfo: UserinfoResponse): string | undefined {
+  private _extractName(userInfo: UserinfoResponse): string {
+    // FIXME: check for presence of value
     if (this._namePropertyKey) {
-      return (userInfo[this._namePropertyKey] as any)?.toString();
+      return (userInfo[this._namePropertyKey] as any)?.toString() ?? '';
     }
     const fname = userInfo.given_name ?? '';
     const lname = userInfo.family_name ?? '';
 
-    return `${fname} ${lname}`.trim() || userInfo.name;
+    return `${fname} ${lname}`.trim() || userInfo.name || '';
   }
 
   /**
@@ -398,13 +399,16 @@ export async function getOIDCLoginSystem(): Promise<GristLoginSystem | undefined
   if (!process.env.GRIST_OIDC_IDP_ISSUER) { return undefined; }
   return {
     async getMiddleware(gristServer: GristServer) {
-      const config = await OIDCConfig.build(gristServer.sendAppPage.bind(gristServer));
+      const config = await OIDCConfig.build(
+        gristServer.sendAppPage.bind(gristServer),
+        gristServer.getSessions.bind(gristServer)
+      );
       return {
         getLoginRedirectUrl: config.getLoginRedirectUrl.bind(config),
         getSignUpRedirectUrl: config.getLoginRedirectUrl.bind(config),
         getLogoutRedirectUrl: config.getLogoutRedirectUrl.bind(config),
         async addEndpoints(app: express.Express) {
-          config.addEndpoints(app, gristServer.getSessions());
+          config.addEndpoints(app);
           return 'oidc';
         },
       };
