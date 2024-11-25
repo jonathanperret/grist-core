@@ -102,8 +102,8 @@ export class OIDCConfig {
   /**
    * Handy alias to create an OIDCConfig instance and initialize it.
    */
-  public static async build(sendAppPage: SendAppPageFunction, sessions: Sessions): Promise<OIDCConfig> {
-    const config = new OIDCConfig(sendAppPage, sessions);
+  public static async build(sendAppPage: SendAppPageFunction, getSessions: () => Sessions): Promise<OIDCConfig> {
+    const config = new OIDCConfig(sendAppPage, getSessions);
     await config.initOIDC();
     return config;
   }
@@ -120,7 +120,7 @@ export class OIDCConfig {
 
   public constructor(
     private _sendAppPage: SendAppPageFunction,
-    private _sessions: Sessions,
+    private _getSessions: () => Sessions,
   ) {}
 
   public async initOIDC(): Promise<void> {
@@ -200,7 +200,7 @@ export class OIDCConfig {
   public async handleCallback(req: express.Request, res: express.Response): Promise<void> {
     let scopedSession;
     try {
-      scopedSession = this._sessions.getOrCreateSessionFromRequest(req);
+      scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
     } catch(err) {
       log.warn("OIDCConfig callback:", err.message);
       return this._sendErrorPage(req, res);
@@ -266,7 +266,7 @@ export class OIDCConfig {
   }
 
   public async getLoginRedirectUrl(req: express.Request, targetUrl: URL): Promise<string> {
-    const scopedSession = this._sessions.getOrCreateSessionFromRequest(req);
+    const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
 
     const oidcInfo = {
       targetUrl: targetUrl.href,
@@ -285,7 +285,7 @@ export class OIDCConfig {
   }
 
   public async getLogoutRedirectUrl(req: express.Request, redirectUrl: URL): Promise<string> {
-    const scopedSession = this._sessions.getOrCreateSessionFromRequest(req);
+    const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
     const { oidc } = await scopedSession.getScopedSession();
 
     // For IdPs that don't have end_session_endpoint, we just redirect to the requested page.
@@ -399,7 +399,10 @@ export async function getOIDCLoginSystem(): Promise<GristLoginSystem | undefined
   if (!process.env.GRIST_OIDC_IDP_ISSUER) { return undefined; }
   return {
     async getMiddleware(gristServer: GristServer) {
-      const config = await OIDCConfig.build(gristServer.sendAppPage.bind(gristServer), gristServer.getSessions());
+      const config = await OIDCConfig.build(
+        gristServer.sendAppPage.bind(gristServer),
+        gristServer.getSessions.bind(gristServer)
+      );
       return {
         getLoginRedirectUrl: config.getLoginRedirectUrl.bind(config),
         getSignUpRedirectUrl: config.getLoginRedirectUrl.bind(config),

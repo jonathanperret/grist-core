@@ -21,7 +21,7 @@ async function buildOIDCConfigWith({
   sessions: Sessions;
   client: Client | null;
 }> = {}): Promise<OIDCConfig> {
-  const result: OIDCConfig = new OIDCConfig(sendAppPage, sessions);
+  const result: OIDCConfig = new OIDCConfig(sendAppPage, () => sessions);
   if (client !== null) {
     (result as any)._initClient = Sinon.spy(() => {
       (result as any)._client = client!;
