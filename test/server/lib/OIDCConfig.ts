@@ -1,6 +1,6 @@
 import {EnvironmentSnapshot} from "../testUtils";
 import {OIDCConfig} from "app/server/lib/OIDCConfig";
-import {SessionObj} from "app/server/lib/BrowserSession";
+import {ScopedSession, SessionUserObj} from "app/server/lib/BrowserSession";
 import {Sessions} from "app/server/lib/Sessions";
 import log from "app/server/lib/log";
 import {assert} from "chai";
@@ -8,27 +8,27 @@ import Sinon from "sinon";
 import {Client, custom, generators, errors as OIDCError} from "openid-client";
 import express from "express";
 import _ from "lodash";
-import {RequestWithLogin} from "app/server/lib/Authorizer";
 import { SendAppPageFunction } from "app/server/lib/sendAppPage";
 
 const NOOPED_SEND_APP_PAGE: SendAppPageFunction = () => Promise.resolve();
 
-class OIDCConfigStubbed extends OIDCConfig {
-  public static async buildWithStub(client: Client = new ClientStub().asClient()) {
-    return this.build(NOOPED_SEND_APP_PAGE, client);
+async function buildOIDCConfigWith({
+  sendAppPage = NOOPED_SEND_APP_PAGE,
+  sessions = new FakeSessions().asSessions(),
+  client = new ClientStub().asClient(),
+}: Partial<{
+  sendAppPage: SendAppPageFunction;
+  sessions: Sessions;
+  client: Client | null;
+}> = {}): Promise<OIDCConfig> {
+  const result: OIDCConfig = new OIDCConfig(sendAppPage, sessions);
+  if (client !== null) {
+    (result as any)._initClient = Sinon.spy(() => {
+      (result as any)._client = client!;
+    });
   }
-  public static async build(sendAppPage: SendAppPageFunction, clientStub?: Client): Promise<OIDCConfigStubbed> {
-    const result = new OIDCConfigStubbed(sendAppPage);
-    if (clientStub) {
-      result._initClient = Sinon.spy(() => {
-        result._client = clientStub!;
-      });
-    }
-    await result.initOIDC();
-    return result;
-  }
-
-  public _initClient: Sinon.SinonSpy;
+  await result.initOIDC();
+  return result;
 }
 
 class ClientStub {
@@ -52,6 +52,29 @@ class ClientStub {
   }
   public getAuthorizationUrlStub() {
     return this.authorizationUrl;
+  }
+}
+
+class FakeSessions {
+  public user: SessionUserObj;
+
+  constructor(initialUser: SessionUserObj = {}) {
+    this.user = _.clone(initialUser);
+  }
+
+  public getOrCreateSessionFromRequest(): ScopedSession {
+    return {
+      getScopedSession: async () => _.clone(this.user),
+
+      updateUser : async(req: express.Request, newProps: Partial<SessionUserObj>) => {
+        Object.assign(this.user, newProps);
+      }
+    } as unknown as ScopedSession;
+  }
+
+
+  public asSessions(): Sessions {
+    return this as unknown as Sessions;
   }
 }
 
@@ -107,21 +130,21 @@ describe('OIDCConfig', () => {
       ]) {
         setEnvVars();
         delete process.env[envVar];
-        const promise = OIDCConfig.build(NOOPED_SEND_APP_PAGE);
+        const promise = buildOIDCConfigWith();
         await assert.isRejected(promise, `missing environment variable: ${envVar}`);
       }
     });
 
     it('should reject when the client initialization fails', async () => {
       setEnvVars();
-      sandbox.stub(OIDCConfigStubbed.prototype, '_initClient').rejects(new Error('client init failed'));
-      const promise = OIDCConfigStubbed.build(NOOPED_SEND_APP_PAGE);
+      sandbox.stub(OIDCConfig.prototype as any, '_initClient').rejects(new Error('client init failed'));
+      const promise = buildOIDCConfigWith({ client: null });
       await assert.isRejected(promise, 'client init failed');
     });
 
     it('should create a client with passed information', async () => {
       setEnvVars();
-      const config = await OIDCConfigStubbed.buildWithStub();
+      const config: any = await buildOIDCConfigWith();
       assert.isTrue(config._initClient.calledOnce);
       assert.deepEqual(config._initClient.firstCall.args, [{
         clientId: process.env.GRIST_OIDC_IDP_CLIENT_ID,
@@ -139,7 +162,7 @@ describe('OIDCConfig', () => {
         userinfo_signed_response_alg: 'RS256',
       };
       process.env.GRIST_OIDC_IDP_EXTRA_CLIENT_METADATA = JSON.stringify(extraMetadata);
-      const config = await OIDCConfigStubbed.buildWithStub();
+      const config: any = await buildOIDCConfigWith();
       assert.isTrue(config._initClient.calledOnce);
       assert.deepEqual(config._initClient.firstCall.args, [{
         clientId: process.env.GRIST_OIDC_IDP_CLIENT_ID,
@@ -181,7 +204,7 @@ describe('OIDCConfig', () => {
           Object.assign(process.env, ctx.env);
           const client = new ClientStub();
           client.issuer.metadata.end_session_endpoint = ctx.end_session_endpoint;
-          const promise = OIDCConfigStubbed.buildWithStub(client.asClient());
+          const promise = buildOIDCConfigWith({ client: client.asClient() });
           if (ctx.errorMsg) {
             await assert.isRejected(promise, ctx.errorMsg);
             assert.isFalse(isInitializedLogCalled());
@@ -230,7 +253,7 @@ describe('OIDCConfig', () => {
           const setHttpOptionsDefaultsStub = sandbox.stub(custom, 'setHttpOptionsDefaults');
           setEnvVars();
           Object.assign(process.env, ctx.env);
-          const promise = OIDCConfigStubbed.buildWithStub();
+          const promise = buildOIDCConfigWith();
           if (ctx.expectedErrorMsg) {
             await assert.isRejected(promise, ctx.expectedErrorMsg);
           } else {
@@ -253,14 +276,14 @@ describe('OIDCConfig', () => {
     it('should reject when GRIST_OIDC_IDP_ENABLED_PROTECTIONS contains unsupported values', async () => {
       setEnvVars();
       process.env.GRIST_OIDC_IDP_ENABLED_PROTECTIONS = 'STATE,NONCE,PKCE,invalid';
-      const promise = OIDCConfig.build(NOOPED_SEND_APP_PAGE);
+      const promise = buildOIDCConfigWith();
       await checkRejection(promise, 'invalid');
     });
 
     it('should successfully change the supported protections', async function () {
       setEnvVars();
       process.env.GRIST_OIDC_IDP_ENABLED_PROTECTIONS = 'NONCE';
-      const config = await OIDCConfigStubbed.buildWithStub();
+      const config = await buildOIDCConfigWith();
       assert.isTrue(config.supportsProtection("NONCE"));
       assert.isFalse(config.supportsProtection("PKCE"));
       assert.isFalse(config.supportsProtection("STATE"));
@@ -269,14 +292,14 @@ describe('OIDCConfig', () => {
     it('should reject when set to an empty string', async function () {
       setEnvVars();
       process.env.GRIST_OIDC_IDP_ENABLED_PROTECTIONS = '';
-      const promise = OIDCConfigStubbed.buildWithStub();
+      const promise = buildOIDCConfigWith();
       await checkRejection(promise, '');
     });
 
     it('should accept to be set to "UNPROTECTED"', async function () {
       setEnvVars();
       process.env.GRIST_OIDC_IDP_ENABLED_PROTECTIONS = 'UNPROTECTED';
-      const config = await OIDCConfigStubbed.buildWithStub();
+      const config = await buildOIDCConfigWith();
       assert.isFalse(config.supportsProtection("NONCE"));
       assert.isFalse(config.supportsProtection("PKCE"));
       assert.isFalse(config.supportsProtection("STATE"));
@@ -287,13 +310,13 @@ describe('OIDCConfig', () => {
     it('should reject when set to "UNPROTECTED,PKCE"', async function () {
       setEnvVars();
       process.env.GRIST_OIDC_IDP_ENABLED_PROTECTIONS = 'UNPROTECTED,PKCE';
-      const promise = OIDCConfigStubbed.buildWithStub();
+      const promise = buildOIDCConfigWith();
       await checkRejection(promise, 'UNPROTECTED');
     });
 
     it('if omitted, should default to "STATE,PKCE"', async function () {
       setEnvVars();
-      const config = await OIDCConfigStubbed.buildWithStub();
+      const config = await buildOIDCConfigWith();
       assert.isFalse(config.supportsProtection("NONCE"));
       assert.isTrue(config.supportsProtection("PKCE"));
       assert.isTrue(config.supportsProtection("STATE"));
@@ -398,16 +421,19 @@ describe('OIDCConfig', () => {
         setEnvVars();
         Object.assign(process.env, ctx.env);
         const clientStub = new ClientStub();
-        const config = await OIDCConfigStubbed.buildWithStub(clientStub.asClient());
-        const session = {};
-        const req = {
-          session
-        } as unknown as express.Request;
+        const req = {} as unknown as express.Request;
+        const fakeSessions = new FakeSessions();
+        const config = await buildOIDCConfigWith({
+          sessions: fakeSessions.asSessions(),
+          client: clientStub.asClient()
+        });
+
         const url = await config.getLoginRedirectUrl(req, new URL(TARGET_URL));
+
         assert.equal(url, ClientStub.FAKE_REDIRECT_URL);
         assert.isTrue(clientStub.authorizationUrl.calledOnce);
         assert.deepEqual(clientStub.authorizationUrl.firstCall.args, ctx.expectedCalledWith);
-        assert.deepEqual(session, ctx.expectedSession);
+        assert.deepEqual(fakeSessions.user.oidc, ctx.expectedSession.oidc);
       });
     });
   });
@@ -421,12 +447,12 @@ describe('OIDCConfig', () => {
       name: 'fake-name',
       email_verified: true,
     };
-    const DEFAULT_SESSION = {
+    const DEFAULT_SESSION: SessionUserObj = {
       oidc: {
         code_verifier: FAKE_CODE_VERIFIER,
-        state: FAKE_STATE
-      }
-    } as SessionObj;
+        state: FAKE_STATE,
+      },
+    };
     const DEFAULT_EXPECTED_CALLBACK_CHECKS = {
       state: FAKE_STATE,
       code_verifier: FAKE_CODE_VERIFIER,
@@ -436,12 +462,7 @@ describe('OIDCConfig', () => {
       send: Sinon.SinonStub;
       redirect: Sinon.SinonStub;
     };
-    let fakeSessions: {
-      getOrCreateSessionFromRequest: Sinon.SinonStub
-    };
-    let fakeScopedSession: {
-      operateOnScopedSession: Sinon.SinonStub
-    };
+    const fakeSessions = new FakeSessions();
 
     beforeEach(() => {
       fakeRes = {
@@ -449,12 +470,7 @@ describe('OIDCConfig', () => {
         status: Sinon.stub().returnsThis(),
         send: Sinon.stub().returnsThis(),
       };
-      fakeScopedSession = {
-        operateOnScopedSession: Sinon.stub().resolves(),
-      };
-      fakeSessions = {
-        getOrCreateSessionFromRequest: Sinon.stub().returns(fakeScopedSession),
-      };
+      fakeSessions.user = {};
     });
 
     function checkUserProfile(expectedUserProfile: object) {
@@ -672,21 +688,21 @@ describe('OIDCConfig', () => {
         const fakeParams = {
           state: FAKE_STATE,
         };
-        const config = await OIDCConfigStubbed.build(sendAppPageStub as SendAppPageFunction, clientStub.asClient());
-        const session = _.clone(ctx.session); // session is modified, so clone it
-        const req = {
-          session,
-          t: (key: string) => key
-        } as unknown as express.Request;
+        const config = await buildOIDCConfigWith({
+          sendAppPage: sendAppPageStub as SendAppPageFunction,
+          sessions: fakeSessions.asSessions(),
+          client: clientStub.asClient()
+        });
         clientStub.callbackParams.returns(fakeParams);
         const tokenSet = { id_token: 'id_token', ...ctx.tokenSet };
         clientStub.callback.resolves(tokenSet);
         clientStub.userinfo.returns(_.clone(ctx.userInfo ?? FAKE_USER_INFO));
-        const user: { profile?: object } = {};
-        fakeScopedSession.operateOnScopedSession.yields(user);
+        fakeSessions.user = _.clone(ctx.session); // session is modified, so clone it
 
+        const req = {
+          t: (key: string) => key
+        } as unknown as express.Request;
         await config.handleCallback(
-          fakeSessions as unknown as Sessions,
           req,
           fakeRes as unknown as express.Response
         );
@@ -708,13 +724,11 @@ describe('OIDCConfig', () => {
             fakeParams,
             ctx.expectedCbChecks ?? DEFAULT_EXPECTED_CALLBACK_CHECKS
           ]);
-          assert.deepEqual(session, {
-            oidc: {
-              idToken: tokenSet.id_token,
-            }
+          assert.deepEqual(fakeSessions.user.oidc, {
+            idToken: tokenSet.id_token,
           }, 'oidc info should only keep state and id_token in the session and for the logout');
         }
-        ctx.extraChecks?.({ fakeRes, user, sendAppPageStub });
+        ctx.extraChecks?.({ fakeRes, user: fakeSessions.user, sendAppPageStub });
       });
     });
 
@@ -723,10 +737,12 @@ describe('OIDCConfig', () => {
       setEnvVars();
       const clientStub = new ClientStub();
       const sendAppPageStub = Sinon.stub().resolves();
-      const config = await OIDCConfigStubbed.build(sendAppPageStub, clientStub.asClient());
-      const req = {
-        session: DEFAULT_SESSION,
-      } as unknown as express.Request;
+      const config = await buildOIDCConfigWith({
+        sendAppPage: sendAppPageStub,
+        sessions: fakeSessions.asSessions(),
+        client: clientStub.asClient()
+      });
+      const req = {} as unknown as express.Request;
       clientStub.callbackParams.returns({state: FAKE_STATE});
       const errorResponse = {
         body: { property: 'response here' },
@@ -737,13 +753,15 @@ describe('OIDCConfig', () => {
       const err = new OIDCError.OPError({error: 'userinfo failed'}, errorResponse);
       clientStub.userinfo.rejects(err);
 
+      fakeSessions.user = _.clone(DEFAULT_SESSION);
       await config.handleCallback(
-        fakeSessions as unknown as Sessions,
         req,
         fakeRes as unknown as express.Response
       );
 
-      assert.equal(logErrorStub.callCount, 2, 'logErrorStub show be called twice');
+      assert.isUndefined(fakeSessions.user.oidc);
+
+      assert.equal(logErrorStub.callCount, 2, 'logErrorStub should be called twice');
       assert.include(logErrorStub.firstCall.args[0], err.message);
       assert.include(logErrorStub.secondCall.args[0], 'Response received');
       assert.deepEqual(logErrorStub.secondCall.args[1], errorResponse);
@@ -752,14 +770,15 @@ describe('OIDCConfig', () => {
   });
 
   describe('getLogoutRedirectUrl', () => {
+    const REDIRECT_URL = new URL('http://localhost:8484/docs/signed-out');
     const STABLE_LOGOUT_URL = new URL('http://localhost:8484/signed-out');
     const URL_RETURNED_BY_CLIENT = 'http://localhost:8484/logout_url_from_issuer';
     const ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT = 'http://localhost:8484/logout';
-    const FAKE_SESSION = {
+    const FAKE_SESSION: SessionUserObj = {
       oidc: {
         idToken: 'id_token',
       }
-    } as SessionObj;
+    };
 
     [
       {
@@ -767,47 +786,61 @@ describe('OIDCConfig', () => {
         env: {
           GRIST_OIDC_IDP_SKIP_END_SESSION_ENDPOINT: 'true',
         },
-        expectedUrl: STABLE_LOGOUT_URL.href,
-      }, {
+        expectedUrl: REDIRECT_URL.href,
+        session: FAKE_SESSION,
+      },
+      {
         itMsg: 'should use the GRIST_OIDC_IDP_END_SESSION_ENDPOINT when it is set',
         env: {
-          GRIST_OIDC_IDP_END_SESSION_ENDPOINT: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT
+          GRIST_OIDC_IDP_END_SESSION_ENDPOINT:
+            ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
         },
-        expectedUrl: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT
-      }, {
+        expectedUrl: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
+        session: FAKE_SESSION,
+      },
+      {
         itMsg: 'should call the end session endpoint with the expected parameters',
         expectedUrl: URL_RETURNED_BY_CLIENT,
         expectedLogoutParams: {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
           id_token_hint: FAKE_SESSION.oidc!.idToken,
-        }
-      }, {
-        itMsg: 'should call the end session endpoint with no idToken if session is missing',
+        },
+        session: FAKE_SESSION,
+      },
+      {
+        itMsg: 'should call the end session endpoint with no idToken if session oidc info is missing',
         expectedUrl: URL_RETURNED_BY_CLIENT,
         expectedLogoutParams: {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
           id_token_hint: undefined,
         },
-        session: null
-      }
-    ].forEach(ctx => {
+        session: {},
+      },
+    ].forEach((ctx) => {
       it(ctx.itMsg, async () => {
         setEnvVars();
         Object.assign(process.env, ctx.env);
         const clientStub = new ClientStub();
         clientStub.endSessionUrl.returns(URL_RETURNED_BY_CLIENT);
-        const config = await OIDCConfigStubbed.buildWithStub(clientStub.asClient());
+
+        const fakeSessions = new FakeSessions(ctx.session);
+
+        const config = await buildOIDCConfigWith({
+          sessions: fakeSessions.asSessions(),
+          client: clientStub.asClient()
+        });
         const req = {
           headers: {
-            host: STABLE_LOGOUT_URL.host
+            host: STABLE_LOGOUT_URL.host,
           },
-          session: 'session' in ctx ? ctx.session : FAKE_SESSION
-        } as unknown as RequestWithLogin;
-        const url = await config.getLogoutRedirectUrl(req);
+        } as unknown as express.Request;
+        const url = await config.getLogoutRedirectUrl(req, REDIRECT_URL);
         assert.equal(url, ctx.expectedUrl);
         if (ctx.expectedLogoutParams) {
           assert.isTrue(clientStub.endSessionUrl.calledOnce);
-          assert.deepEqual(clientStub.endSessionUrl.firstCall.args, [ctx.expectedLogoutParams]);
+          assert.deepEqual(clientStub.endSessionUrl.firstCall.args, [
+            ctx.expectedLogoutParams,
+          ]);
         }
       });
     });

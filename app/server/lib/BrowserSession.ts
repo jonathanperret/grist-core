@@ -42,6 +42,8 @@ export interface SessionUserObj {
   // State for SAML-mediated logins.
   samlNameId?: string;
   samlSessionIndex?: string;
+
+  oidc?: SessionOIDCInfo;
 }
 
 // Session state maintained for a particular browser. It is identified by a cookie. There may be
@@ -68,8 +70,6 @@ export interface SessionObj {
                           // anonymous editing (e.g. to allow the user to edit
                           // something they just added, without allowing the suer
                           // to edit other people's contributions).
-
-  oidc?: SessionOIDCInfo;
 }
 
 export interface SessionOIDCInfo {
