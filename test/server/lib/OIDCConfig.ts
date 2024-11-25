@@ -68,6 +68,9 @@ class FakeSessions {
 
       updateUser : async(req: express.Request, newProps: Partial<SessionUserObj>) => {
         Object.assign(this.user, newProps);
+        if (!this.user?.profile?.email) {
+          throw new Error("Unable to save SessionUserObj without email");
+        }
       }
     } as unknown as ScopedSession;
   }
