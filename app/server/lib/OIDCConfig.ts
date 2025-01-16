@@ -73,6 +73,7 @@ import {
 import { Sessions } from './Sessions';
 import log from 'app/server/lib/log';
 import { AppSettings, appSettings } from './AppSettings';
+import { RequestWithLogin } from './Authorizer';
 import { UserProfile } from 'app/common/LoginSessionAPI';
 import { SendAppPageFunction } from 'app/server/lib/sendAppPage';
 import { StringUnionError } from 'app/common/StringUnion';
@@ -198,26 +199,26 @@ export class OIDCConfig {
   }
 
   public async handleCallback(req: express.Request, res: express.Response): Promise<void> {
-    let scopedSession;
+    let mreq;
     try {
-      scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
+      mreq = this._getRequestWithSession(req);
     } catch(err) {
       log.warn("OIDCConfig callback:", err.message);
       return this._sendErrorPage(req, res);
     }
 
     try {
-      const params = this._client.callbackParams(req);
+      const oidc = mreq.session.oidc;
 
-      const { oidc: oidcInfo } = await scopedSession.getScopedSession();
-
-      if (!oidcInfo) {
+      if (!oidc) {
         throw new Error('Missing OIDC information associated to this session');
       }
 
-      const { targetUrl } = oidcInfo;
+      const params = this._client.callbackParams(req);
 
-      const checks = this._protectionManager.getCallbackChecks(oidcInfo);
+      const { targetUrl } = oidc;
+
+      const checks = this._protectionManager.getCallbackChecks(oidc);
 
       // The callback function will compare the protections present in the params and the ones we retrieved
       // from the session. If they don't match, it will throw an error.
@@ -237,15 +238,20 @@ export class OIDCConfig {
       const profile = this._makeUserProfileFromUserInfo(userInfo);
       log.info(`OIDCConfig: got OIDC response for ${profile.email} (${profile.name}) redirecting to ${targetUrl}`);
 
+      const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
       await scopedSession.updateUser(req, {
         profile,
-        // We clear the previous session info, like the states, nonce or the code verifier, which
-        // now that we are authenticated.
         // We store the idToken for later, especially for the logout
-        oidc: {
-          idToken: tokenSet.id_token,
-        }
+        idToken: tokenSet.id_token,
       });
+
+      // Delete entirely the session OIDC data when the callback is called.
+      // This way, we prevent repeated login attempts.
+      // We have to do this after scopedSession.updateUser, because that
+      // method reads the session data back from the store first.
+      // We also need to do this before redirecting, because the redirect
+      // is what triggers session persistence.
+      delete mreq.session.oidc;
 
       res.redirect(targetUrl ?? '/');
     } catch (err) {
@@ -255,38 +261,39 @@ export class OIDCConfig {
         log.error('Response received: %o',  maybeResponse);
       }
 
-      // Delete entirely the session data when the login failed.
-      // This way, we prevent several login attempts.
-      //
-      // Also session deletion must be done before sending the response.
-      await scopedSession.updateUser(req, { oidc: undefined });
+      // Delete entirely the session OIDC data when the callback is called.
+      // This way, we prevent repeated login attempts.
+      // This is duplicated from the try block above, because we want to do this
+      // even if the try block throws an error. Note that we can't use a finally
+      // block, because the _sendErrorPage call below is what triggers session
+      // persistence, and we need to delete the session data before that.
+      delete mreq.session.oidc;
 
       await this._sendErrorPage(req, res, err.userFriendlyMessage);
     }
   }
 
   public async getLoginRedirectUrl(req: express.Request, targetUrl: URL): Promise<string> {
-    const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
+    const mreq = this._getRequestWithSession(req);
 
-    const oidcInfo = {
+    const oidc = {
       targetUrl: targetUrl.href,
       ...this._protectionManager.generateSessionInfo()
     };
 
-    await scopedSession.updateUser(req, {
-      oidc: oidcInfo,
-    });
+    mreq.session.oidc = oidc;
 
     return this._client.authorizationUrl({
       scope: process.env.GRIST_OIDC_IDP_SCOPES || 'openid email profile',
       acr_values: this._acrValues,
-      ...this._protectionManager.forgeAuthUrlParams(oidcInfo),
+      ...this._protectionManager.forgeAuthUrlParams(oidc),
     });
   }
 
   public async getLogoutRedirectUrl(req: express.Request, redirectUrl: URL): Promise<string> {
     const scopedSession = this._getSessions().getOrCreateSessionFromRequest(req);
-    const { oidc } = await scopedSession.getScopedSession();
+    // FIXME at this point the ScopedSession has already been cleared by sessionClearMiddleware
+    const { idToken } = await scopedSession.getScopedSession();
 
     // For IdPs that don't have end_session_endpoint, we just redirect to the requested page.
     if (this._skipEndSessionEndpoint) {
@@ -300,7 +307,7 @@ export class OIDCConfig {
     return this._client.endSessionUrl({
       // Ignore redirectUrl because OIDC providers don't allow variable redirect URIs
       post_logout_redirect_uri: stableRedirectUri,
-      id_token_hint: oidc?.idToken,
+      id_token_hint: idToken,
     });
   }
 
@@ -330,6 +337,13 @@ export class OIDCConfig {
         errMessage: userFriendlyMessage
       },
     });
+  }
+
+  private _getRequestWithSession(req: express.Request) {
+    const mreq = req as RequestWithLogin;
+    if (!mreq.session) { throw new Error('no session available'); }
+
+    return mreq;
   }
 
   private _buildEnabledProtections(section: AppSettings): Set<EnabledProtectionString> {

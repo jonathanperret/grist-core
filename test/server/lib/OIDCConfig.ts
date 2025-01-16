@@ -1,6 +1,6 @@
 import {EnvironmentSnapshot} from "../testUtils";
 import {OIDCConfig} from "app/server/lib/OIDCConfig";
-import {ScopedSession, SessionUserObj} from "app/server/lib/BrowserSession";
+import {ScopedSession, SessionObj, SessionUserObj} from "app/server/lib/BrowserSession";
 import {Sessions} from "app/server/lib/Sessions";
 import log from "app/server/lib/log";
 import {assert} from "chai";
@@ -9,6 +9,7 @@ import {Client, custom, generators, errors as OIDCError} from "openid-client";
 import express from "express";
 import _ from "lodash";
 import { SendAppPageFunction } from "app/server/lib/sendAppPage";
+import { RequestWithLogin } from "app/server/lib/Authorizer";
 
 const NOOPED_SEND_APP_PAGE: SendAppPageFunction = () => Promise.resolve();
 
@@ -424,7 +425,10 @@ describe('OIDCConfig', () => {
         setEnvVars();
         Object.assign(process.env, ctx.env);
         const clientStub = new ClientStub();
-        const req = {} as unknown as express.Request;
+        const session: SessionObj = {};
+        const req = {
+          session
+        } as unknown as RequestWithLogin;
         const fakeSessions = new FakeSessions();
         const config = await buildOIDCConfigWith({
           sessions: fakeSessions.asSessions(),
@@ -436,7 +440,7 @@ describe('OIDCConfig', () => {
         assert.equal(url, ClientStub.FAKE_REDIRECT_URL);
         assert.isTrue(clientStub.authorizationUrl.calledOnce);
         assert.deepEqual(clientStub.authorizationUrl.firstCall.args, ctx.expectedCalledWith);
-        assert.deepEqual(fakeSessions.user.oidc, ctx.expectedSession.oidc);
+        assert.deepEqual(req.session.oidc, ctx.expectedSession.oidc);
       });
     });
   });
@@ -450,7 +454,7 @@ describe('OIDCConfig', () => {
       name: 'fake-name',
       email_verified: true,
     };
-    const DEFAULT_SESSION: SessionUserObj = {
+    const DEFAULT_SESSION: SessionObj = {
       oidc: {
         code_verifier: FAKE_CODE_VERIFIER,
         state: FAKE_STATE,
@@ -700,11 +704,12 @@ describe('OIDCConfig', () => {
         const tokenSet = { id_token: 'id_token', ...ctx.tokenSet };
         clientStub.callback.resolves(tokenSet);
         clientStub.userinfo.returns(_.clone(ctx.userInfo ?? FAKE_USER_INFO));
-        fakeSessions.user = _.clone(ctx.session); // session is modified, so clone it
-
+        fakeSessions.user = { profile: { name: 'test', email: "test@example.org" } };
+        const session = _.clone(ctx.session); // session is modified, so clone it
         const req = {
-          t: (key: string) => key
-        } as unknown as express.Request;
+          t: (key: string) => key,
+          session,
+        } as unknown as RequestWithLogin;
         await config.handleCallback(
           req,
           fakeRes as unknown as express.Response
@@ -727,9 +732,8 @@ describe('OIDCConfig', () => {
             fakeParams,
             ctx.expectedCbChecks ?? DEFAULT_EXPECTED_CALLBACK_CHECKS
           ]);
-          assert.deepEqual(fakeSessions.user.oidc, {
-            idToken: tokenSet.id_token,
-          }, 'oidc info should only keep state and id_token in the session and for the logout');
+          assert.isUndefined(session.oidc, 'oidc info should only keep state and id_token in the session and for the logout');
+          assert.equal(fakeSessions.user.idToken, tokenSet.id_token);
         }
         ctx.extraChecks?.({ fakeRes, user: fakeSessions.user, sendAppPageStub });
       });
@@ -745,7 +749,8 @@ describe('OIDCConfig', () => {
         sessions: fakeSessions.asSessions(),
         client: clientStub.asClient()
       });
-      const req = {} as unknown as express.Request;
+      const session = _.clone(DEFAULT_SESSION);
+      const req = { session } as RequestWithLogin;
       clientStub.callbackParams.returns({state: FAKE_STATE});
       const errorResponse = {
         body: { property: 'response here' },
@@ -756,13 +761,12 @@ describe('OIDCConfig', () => {
       const err = new OIDCError.OPError({error: 'userinfo failed'}, errorResponse);
       clientStub.userinfo.rejects(err);
 
-      fakeSessions.user = _.clone(DEFAULT_SESSION);
       await config.handleCallback(
         req,
         fakeRes as unknown as express.Response
       );
 
-      assert.isUndefined(fakeSessions.user.oidc);
+      assert.isUndefined(session.oidc);
 
       assert.equal(logErrorStub.callCount, 2, 'logErrorStub should be called twice');
       assert.include(logErrorStub.firstCall.args[0], err.message);
@@ -777,10 +781,8 @@ describe('OIDCConfig', () => {
     const STABLE_LOGOUT_URL = new URL('http://localhost:8484/signed-out');
     const URL_RETURNED_BY_CLIENT = 'http://localhost:8484/logout_url_from_issuer';
     const ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT = 'http://localhost:8484/logout';
-    const FAKE_SESSION: SessionUserObj = {
-      oidc: {
-        idToken: 'id_token',
-      }
+    const FAKE_USER_SESSION: SessionUserObj = {
+      idToken: "id_token",
     };
 
     [
@@ -790,7 +792,7 @@ describe('OIDCConfig', () => {
           GRIST_OIDC_IDP_SKIP_END_SESSION_ENDPOINT: 'true',
         },
         expectedUrl: REDIRECT_URL.href,
-        session: FAKE_SESSION,
+        user_session: FAKE_USER_SESSION,
       },
       {
         itMsg: 'should use the GRIST_OIDC_IDP_END_SESSION_ENDPOINT when it is set',
@@ -799,16 +801,16 @@ describe('OIDCConfig', () => {
             ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
         },
         expectedUrl: ENV_VALUE_GRIST_OIDC_IDP_END_SESSION_ENDPOINT,
-        session: FAKE_SESSION,
+        user_session: FAKE_USER_SESSION,
       },
       {
         itMsg: 'should call the end session endpoint with the expected parameters',
         expectedUrl: URL_RETURNED_BY_CLIENT,
         expectedLogoutParams: {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
-          id_token_hint: FAKE_SESSION.oidc!.idToken,
+          id_token_hint: FAKE_USER_SESSION.idToken,
         },
-        session: FAKE_SESSION,
+        user_session: FAKE_USER_SESSION,
       },
       {
         itMsg: 'should call the end session endpoint with no idToken if session oidc info is missing',
@@ -817,7 +819,7 @@ describe('OIDCConfig', () => {
           post_logout_redirect_uri: STABLE_LOGOUT_URL.href,
           id_token_hint: undefined,
         },
-        session: {},
+        user_session: {},
       },
     ].forEach((ctx) => {
       it(ctx.itMsg, async () => {
@@ -826,7 +828,7 @@ describe('OIDCConfig', () => {
         const clientStub = new ClientStub();
         clientStub.endSessionUrl.returns(URL_RETURNED_BY_CLIENT);
 
-        const fakeSessions = new FakeSessions(ctx.session);
+        const fakeSessions = new FakeSessions(ctx.user_session);
 
         const config = await buildOIDCConfigWith({
           sessions: fakeSessions.asSessions(),
