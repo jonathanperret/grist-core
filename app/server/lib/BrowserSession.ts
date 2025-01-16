@@ -30,7 +30,7 @@ export interface SessionUserObj {
    */
   authSubject?: string;
 
-  // [UNUSED] Login ID token used to access AWS services.
+  // Login ID token from auth provider
   idToken?: string;
 
   // Login access token used to access other AWS services.
@@ -42,6 +42,7 @@ export interface SessionUserObj {
   // State for SAML-mediated logins.
   samlNameId?: string;
   samlSessionIndex?: string;
+
 }
 
 // Session state maintained for a particular browser. It is identified by a cookie. There may be
@@ -82,8 +83,6 @@ export interface SessionOIDCInfo {
   // state is used to protect against Error Responses spoofs.
   state?: string;
   targetUrl?: string;
-  // Stores user claims signed by the issuer, store it to allow loging out.
-  idToken?: string;
 }
 
 // Make an artificial change to a session to encourage express-session to set a cookie.
